@@ -2,7 +2,18 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Bitácora de Series y Películas</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e1216">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bitácora">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Oswald:wght@400;500;600;700&display=swap');
 
@@ -968,6 +979,11 @@ body{
   padding:8px 10px; border-radius:6px; cursor:pointer; white-space:nowrap;
 }
 .drive-btn:hover{ border-color:#4285F4; color:#4285F4; }
+.ios-install-hint{
+  margin-top:10px; font-size:11px; color:var(--text-dim); line-height:1.5;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+}
+.ios-install-hint b{ color:var(--text); }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -1009,6 +1025,12 @@ body{
       <div class="drive-status" id="driveStatus"><span class="dot"></span><span id="driveStatusText">Google Drive: no conectado</span></div>
       <button class="drive-btn" id="btnConnectDrive">🔗 Conectar Google Drive</button>
       <button class="drive-btn" id="btnSyncDriveNow" style="display:none;">🔄 Sincronizar ahora</button>
+    </div>
+    <div class="drive-row" id="pwaInstallRow" style="display:none;">
+      <button class="drive-btn" id="btnInstallPwa">📲 Instalar app en el celular</button>
+    </div>
+    <div class="ios-install-hint" id="iosInstallHint" style="display:none;">
+      📱 En iPhone/iPad: toca <b>Compartir</b> (el ícono del cuadrito con la flecha) y luego <b>"Agregar a pantalla de inicio"</b>.
     </div>
   </div>
 
@@ -2250,6 +2272,43 @@ document.getElementById('btnSyncDriveNow').addEventListener('click', async () =>
 });
 
 window.addEventListener('load', initGoogleDrive);
+
+/* ========================= PWA: instalación y service worker ========================= */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => {
+      console.warn('No se pudo registrar el service worker (¿la app se abrió como archivo local?):', err);
+    });
+  });
+}
+
+let deferredInstallPrompt = null;
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if(!isStandalone) document.getElementById('pwaInstallRow').style.display = 'flex';
+});
+
+document.getElementById('btnInstallPwa').addEventListener('click', async () => {
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('pwaInstallRow').style.display = 'none';
+});
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('pwaInstallRow').style.display = 'none';
+});
+
+// iOS Safari no soporta beforeinstallprompt: mostramos instrucciones manuales
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+if(isIos && !isStandalone){
+  document.getElementById('iosInstallHint').style.display = 'block';
+}
+
 
 /* ========================= AJUSTES: duración promedio ========================= */
 function populateSettingsUI(){
