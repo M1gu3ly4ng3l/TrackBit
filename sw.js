@@ -3,12 +3,12 @@ const SHELL_FILES = [
   './',
   './index.html',
   './manifest.json',
-  './icons/launchericon-48x48.png',
-  './icons/launchericon-72x72.png',
-  './icons/launchericon-96x96.png',
-  './icons/launchericon-144x144.png',
-  './icons/launchericon-192x192.png',
-  './icons/launchericon-512x512.png'
+  './Icons/launchericon-48x48.png',
+  './Icons/launchericon-72x72.png',
+  './Icons/launchericon-96x96.png',
+  './Icons/launchericon-144x144.png',
+  './Icons/launchericon-192x192.png',
+  './Icons/launchericon-512x512.png'
 ];
 
 self.addEventListener('install', (event) => {
