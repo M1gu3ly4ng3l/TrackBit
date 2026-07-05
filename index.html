@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Bitácora de Series y Películas</title>
 
+<!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e1216">
 <meta name="mobile-web-app-capable" content="yes">
@@ -45,6 +46,7 @@ body{
   padding:28px 20px 60px;
 }
 
+/* ---------- Header : deck faceplate ---------- */
 .deck{
   background:linear-gradient(180deg,#181e25,#12161b);
   border:1px solid var(--line);
@@ -714,11 +716,15 @@ body{
 .remove-cover:hover{ color:var(--rec); background:rgba(232,67,46,0.08); }
 .series-name{
   font-family:'Oswald', sans-serif; font-size:16px; font-weight:600; color:var(--text);
-  display:flex; align-items:center; gap:8px;
+  display:flex; align-items:flex-start; gap:8px;
 }
+.series-chevron{ margin-top:4px; }
+.series-cover{ margin-top:1px; }
+.series-title-wrap{ flex:1; min-width:0; line-height:1.4; padding-top:1px; }
 .series-name .badge{
   font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--bg);
   background:var(--tape); padding:2px 7px; border-radius:20px; font-weight:700;
+  white-space:nowrap; margin-left:2px;
 }
 .status-toggle{
   font-family:'JetBrains Mono', monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase;
@@ -2922,8 +2928,8 @@ function render(){
                   style="${cover ? `background-image:url('${cover}')` : ''}"
                   onclick="event.stopPropagation(); openCoverPicker(decodeURIComponent('${encodeURIComponent(serie)}'))"
                   title="${cover ? 'Cambiar portada' : 'Agregar portada'}">${cover ? '' : '🖼️'}</span>
-            ${escapeHtml(serie)} <span class="badge">${items.length} ep.</span>
-            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeCover(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar portada">✕</span>` : ''}
+            <span class="series-title-wrap">${escapeHtml(serie)} <span class="badge">${items.length} ep.</span>
+            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeCover(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar portada">✕</span>` : ''}</span>
           </div>
           <div class="header-tags">
             ${tagsHtml(groupGenre, groupType)}
@@ -3529,8 +3535,8 @@ function renderMovies(){
                   style="${cover ? `background-image:url('${cover}')` : ''}"
                   onclick="event.stopPropagation(); openMovieCoverPicker(decodeURIComponent('${encodeURIComponent(title)}'))"
                   title="${cover ? 'Cambiar portada' : 'Agregar portada'}">${cover ? '' : '🖼️'}</span>
-            ${escapeHtml(title)} <span class="badge">${items.length} ${items.length === 1 ? 'visionado' : 'visionados'}</span>
-            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeMovieCover(decodeURIComponent('${encodeURIComponent(title)}'))" title="Quitar portada">✕</span>` : ''}
+            <span class="series-title-wrap">${escapeHtml(title)} <span class="badge">${items.length} ${items.length === 1 ? 'visionado' : 'visionados'}</span>
+            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeMovieCover(decodeURIComponent('${encodeURIComponent(title)}'))" title="Quitar portada">✕</span>` : ''}</span>
           </div>
           <div class="header-tags">
             ${tagsHtml(groupGenre, groupType)}
