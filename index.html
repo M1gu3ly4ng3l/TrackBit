@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Bitácora de Series y Películas</title>
 
-<!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e1216">
 <meta name="mobile-web-app-capable" content="yes">
@@ -490,6 +489,23 @@ body{
 .field input:disabled{ opacity:0.35; cursor:not-allowed; }
 
 .serie-row{ display:flex; gap:6px; }
+
+/* ---------- Búsqueda de título (Jikan/TMDB) ---------- */
+.title-search-source-row{ display:flex; gap:14px; margin:2px 0 14px; flex-wrap:wrap; }
+.title-search-result{
+  display:flex; align-items:center; gap:10px;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:8px;
+  padding:8px 10px; cursor:pointer;
+}
+.title-search-result:hover{ border-color:var(--tape); }
+.title-search-result-cover{
+  width:40px; height:56px; border-radius:6px; flex-shrink:0;
+  background-size:cover; background-position:center; background-color:var(--bg-panel);
+  display:flex; align-items:center; justify-content:center; font-size:16px;
+}
+.title-search-result-info{ flex:1; min-width:0; }
+.title-search-result-name{ font-size:13px; color:var(--text); font-weight:600; }
+.title-search-result-sub{ font-size:11px; color:var(--text-dim); margin-top:2px; }
 .serie-row input{ flex:1; min-width:0; }
 .cover-mini-btn{
   flex-shrink:0;
@@ -1100,6 +1116,9 @@ body{
       <button class="backup-btn" id="btnOpenDurationSettings">⏱️ Duración promedio por tipo</button>
       <button class="backup-btn" id="btnOpenTrash">🗑️ Papelera <span id="trashCountBadge"></span></button>
     </div>
+    <div class="backup-row">
+      <button class="backup-btn" id="btnOpenApiSettings">🔎 Autocompletar (TMDB)</button>
+    </div>
     <div class="drive-row">
       <div class="drive-status" id="driveStatus"><span class="dot"></span><span id="driveStatusText">Google Drive: no conectado</span></div>
       <button class="drive-btn" id="btnConnectDrive">🔗 Conectar Google Drive</button>
@@ -1141,7 +1160,10 @@ body{
         <div class="grid">
           <div class="field">
             <label for="fSerie">Serie</label>
-            <input id="fSerie" type="text" placeholder="Serie" autocomplete="off" list="serieList">
+            <div class="serie-row">
+              <input id="fSerie" type="text" placeholder="Serie" autocomplete="off" list="serieList">
+              <button type="button" class="cover-mini-btn" id="btnSearchSerie" title="Buscar en Jikan/TMDB para autocompletar">🔍</button>
+            </div>
             <datalist id="serieList"></datalist>
           </div>
           <div class="field">
@@ -1339,6 +1361,7 @@ body{
             <label for="mTitle">Título</label>
             <div class="serie-row">
               <input id="mTitle" type="text" placeholder="Título de la película" autocomplete="off" list="movieList">
+              <button type="button" class="cover-mini-btn" id="btnSearchMovie" title="Buscar en TMDB para autocompletar">🔍</button>
               <button type="button" class="cover-mini-btn" id="btnMovieCover" title="Elegir portada/póster">🖼️</button>
             </div>
             <datalist id="movieList"></datalist>
@@ -1608,6 +1631,43 @@ body{
     </div>
   </div>
 
+  <div class="modal-overlay" id="apiSettingsModalOverlay" style="display:none;">
+    <div class="modal-card">
+      <button class="wrapped-close" id="apiSettingsModalClose" title="Cerrar">✕</button>
+      <div class="panel-label">🔎 Autocompletar título</div>
+      <div style="font-size:11.5px; color:var(--text-dim); margin:-4px 0 14px; line-height:1.5;">
+        Al registrar una serie o película vas a poder buscarla y traer automáticamente género, tipo, portada y capítulos totales.
+        Series/anime usan <b>Jikan</b> (API de MyAnimeList, no necesita clave). Para buscar en <b>TMDB</b> (series live action y películas) necesitás una clave gratuita propia.
+      </div>
+      <div class="field full-row">
+        <label for="tmdbApiKeyInput">Clave de API de TMDB (v3 auth)</label>
+        <input type="text" id="tmdbApiKeyInput" placeholder="Pegá acá tu API key de themoviedb.org">
+      </div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:-8px;">
+        Conseguila gratis en <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener" style="color:var(--tape);">themoviedb.org/settings/api</a> (creá una cuenta → Configuración → API → "Solicitar una clave de API" → tipo "Developer").
+        Se guarda solo en este dispositivo/tu backup, nunca se envía a ningún otro lado.
+      </div>
+      <button class="btn-record" id="apiSettingsModalSave" style="margin-top:18px;">✔ Guardar</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="titleSearchModalOverlay" style="display:none;">
+    <div class="modal-card" style="max-width:420px;">
+      <button class="wrapped-close" id="titleSearchModalClose" title="Cerrar">✕</button>
+      <div class="panel-label" id="titleSearchModalTitle">🔍 Buscar título</div>
+      <div class="title-search-source-row" id="titleSearchSourceRow">
+        <label class="checkbox-row-inline"><input type="radio" name="titleSearchSource" value="jikan" checked> 📺 Anime (Jikan/MAL)</label>
+        <label class="checkbox-row-inline"><input type="radio" name="titleSearchSource" value="tmdb"> 🎬 TMDB</label>
+      </div>
+      <div class="serie-row">
+        <input type="text" id="titleSearchInput" placeholder="Escribí el nombre...">
+        <button type="button" class="cover-mini-btn" id="titleSearchGoBtn" title="Buscar">🔍</button>
+      </div>
+      <div id="titleSearchStatus" style="font-size:12px; color:var(--text-dim); margin-top:8px;"></div>
+      <div id="titleSearchResults" style="display:flex; flex-direction:column; gap:8px; max-height:48vh; overflow-y:auto; margin-top:10px;"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="trashModalOverlay" style="display:none;">
     <div class="modal-card">
       <button class="wrapped-close" id="trashModalClose" title="Cerrar">✕</button>
@@ -1796,9 +1856,16 @@ let movieSagas = {};      // { titleKeyLower: franchiseKey } — a qué franquic
 let franchises = {};       // { franchiseKey: { name:'UCM', goal: 33 } } — registro de franquicias con meta editable
 let movieFolderMusic = {}; // { titleKeyLower: {name, dataUrl} }
 let movieDuration = {};  // { titleKeyLower: minutos (number) } — pisa el promedio general por tipo
+// Datos traídos de Jikan/TMDB en la última búsqueda seleccionada, a la espera de que se registre el visionado
+let pendingApiGenresSeries = null;
+let pendingApiEpisodesSeries = null;
+let pendingApiGenresMovie = null;
+let titleSearchContext = null; // 'series' | 'movie'
+let titleSearchResultsData = [];
 const DEFAULT_SETTINGS = {
   episodeLive: 45, episodeAnimada: 24, episodeDefault: 30,
-  movieLive: 110, movieAnimada: 90, movieDefault: 100
+  movieLive: 110, movieAnimada: 90, movieDefault: 100,
+  tmdbApiKey: ''
 };
 function normalizeSettings(raw){
   const s = Object.assign({}, DEFAULT_SETTINGS, raw || {});
@@ -2699,6 +2766,239 @@ async function saveDurationSettings(){
   await saveAll();
 }
 document.getElementById('btnOpenDurationSettings').addEventListener('click', openDurationSettings);
+
+function openApiSettings(){
+  document.getElementById('tmdbApiKeyInput').value = settings.tmdbApiKey || '';
+  document.getElementById('apiSettingsModalOverlay').style.display = 'flex';
+}
+function closeApiSettings(){
+  document.getElementById('apiSettingsModalOverlay').style.display = 'none';
+}
+async function saveApiSettings(){
+  settings.tmdbApiKey = document.getElementById('tmdbApiKeyInput').value.trim();
+  closeApiSettings();
+  await saveAll();
+}
+document.getElementById('btnOpenApiSettings').addEventListener('click', openApiSettings);
+document.getElementById('apiSettingsModalClose').addEventListener('click', closeApiSettings);
+document.getElementById('apiSettingsModalSave').addEventListener('click', saveApiSettings);
+document.getElementById('apiSettingsModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'apiSettingsModalOverlay') closeApiSettings();
+});
+
+/* ========================= BÚSQUEDA EXTERNA (Jikan / TMDB) ========================= */
+const EXTERNAL_GENRE_MAP = {
+  'accion': 'Acción', 'accion y aventura': 'Acción', 'action': 'Acción',
+  'aventura': 'Aventura', 'adventure': 'Aventura',
+  'comedia': 'Comedia', 'comedy': 'Comedia',
+  'drama': 'Drama', 'telenovela': 'Drama', 'slice of life': 'Drama',
+  'terror': 'Terror', 'horror': 'Terror',
+  'suspense': 'Suspenso', 'suspenso': 'Suspenso', 'misterio': 'Suspenso', 'mystery': 'Suspenso',
+  'thriller': 'Suspenso', 'crimen': 'Suspenso', 'crime': 'Suspenso',
+  'ciencia ficcion': 'Ciencia Ficción', 'sci-fi': 'Ciencia Ficción', 'science fiction': 'Ciencia Ficción',
+  'ciencia ficcion y fantasia': 'Ciencia Ficción',
+  'fantasia': 'Fantasía', 'fantasy': 'Fantasía', 'supernatural': 'Fantasía',
+  'romance': 'Romance',
+  'documental': 'Documental', 'documentary': 'Documental',
+  'musica': 'Musical', 'music': 'Musical', 'musical': 'Musical'
+};
+function normalizeGenreKey(s){
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+function mapExternalGenre(name){
+  return EXTERNAL_GENRE_MAP[normalizeGenreKey(name)] || null;
+}
+function parseJikanDuration(str){
+  if(!str) return null;
+  const hrMatch = str.match(/(\d+)\s*hr/);
+  const minMatch = str.match(/(\d+)\s*min/);
+  const hours = hrMatch ? parseInt(hrMatch[1], 10) : 0;
+  const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
+  const total = hours * 60 + mins;
+  return total > 0 ? total : null;
+}
+async function fetchImageAsDataUrl(url){
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    return await resizeImageToDataUrl(blob, 300, 0.8);
+  }catch(err){
+    console.warn('No se pudo incrustar la portada, se usará el enlace directo:', err);
+    return url; // sigue viéndose igual, solo que queda como URL externa en vez de embebida
+  }
+}
+
+function openTitleSearch(kind){
+  titleSearchContext = kind;
+  document.getElementById('titleSearchModalTitle').textContent = kind === 'series' ? '🔍 Buscar serie/anime' : '🔍 Buscar película';
+  document.getElementById('titleSearchSourceRow').style.display = kind === 'series' ? 'flex' : 'none';
+  document.querySelector('input[name="titleSearchSource"][value="' + (kind === 'series' ? 'jikan' : 'tmdb') + '"]').checked = true;
+  const currentTitle = kind === 'series' ? document.getElementById('fSerie').value.trim() : document.getElementById('mTitle').value.trim();
+  document.getElementById('titleSearchInput').value = currentTitle;
+  document.getElementById('titleSearchStatus').textContent = '';
+  document.getElementById('titleSearchResults').innerHTML = '';
+  titleSearchResultsData = [];
+  document.getElementById('titleSearchModalOverlay').style.display = 'flex';
+  setTimeout(() => { document.getElementById('titleSearchInput').focus(); if(currentTitle) runTitleSearch(); }, 30);
+}
+function closeTitleSearch(){
+  document.getElementById('titleSearchModalOverlay').style.display = 'none';
+}
+window.openTitleSearch = openTitleSearch;
+
+async function jikanSearch(query){
+  const res = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=10`);
+  if(!res.ok) throw new Error('Jikan HTTP ' + res.status);
+  const data = await res.json();
+  return (data.data || []).map(item => ({
+    source: 'jikan',
+    title: item.title,
+    subtitle: [item.type, item.year, (item.episodes ? item.episodes + ' ep.' : '')].filter(Boolean).join(' · '),
+    imageUrl: (item.images && item.images.jpg && (item.images.jpg.large_image_url || item.images.jpg.image_url)) || null,
+    genres: (item.genres || []).map(g => g.name),
+    episodes: item.episodes || null,
+    durationMin: parseJikanDuration(item.duration)
+  }));
+}
+
+async function tmdbSearch(query, kind){
+  const endpoint = kind === 'movie' ? 'movie' : 'tv';
+  const url = `https://api.themoviedb.org/3/search/${endpoint}?api_key=${encodeURIComponent(settings.tmdbApiKey)}&query=${encodeURIComponent(query)}&language=es-ES`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('TMDB HTTP ' + res.status);
+  const data = await res.json();
+  return (data.results || []).slice(0, 10).map(item => {
+    const name = kind === 'movie' ? item.title : item.name;
+    const dateStr = kind === 'movie' ? item.release_date : item.first_air_date;
+    const year = dateStr ? dateStr.slice(0, 4) : '';
+    return {
+      source: 'tmdb',
+      tmdbId: item.id,
+      tmdbMediaType: endpoint,
+      title: name,
+      subtitle: year,
+      imageUrl: item.poster_path ? `https://image.tmdb.org/t/p/w342${item.poster_path}` : null,
+      genres: null,
+      episodes: null,
+      durationMin: null
+    };
+  });
+}
+
+async function runTitleSearch(){
+  const query = document.getElementById('titleSearchInput').value.trim();
+  const statusEl = document.getElementById('titleSearchStatus');
+  const resultsEl = document.getElementById('titleSearchResults');
+  if(!query){ statusEl.textContent = 'Escribí algo para buscar.'; return; }
+  const source = document.querySelector('input[name="titleSearchSource"]:checked').value;
+  statusEl.textContent = 'Buscando...';
+  resultsEl.innerHTML = '';
+  titleSearchResultsData = [];
+  try{
+    if(source === 'jikan'){
+      titleSearchResultsData = await jikanSearch(query);
+    } else {
+      if(!settings.tmdbApiKey){
+        statusEl.textContent = '⚠️ Primero configurá tu clave de TMDB (botón "🔎 Autocompletar (TMDB)" en la pantalla principal).';
+        return;
+      }
+      titleSearchResultsData = await tmdbSearch(query, titleSearchContext);
+    }
+  }catch(err){
+    console.error('Error buscando título:', err);
+    statusEl.textContent = '⚠️ No se pudo buscar. Revisá tu conexión' + (source === 'tmdb' ? ' o tu clave de TMDB.' : '.');
+    return;
+  }
+  if(!titleSearchResultsData.length){
+    statusEl.textContent = 'Sin resultados.';
+    return;
+  }
+  statusEl.textContent = `${titleSearchResultsData.length} resultado(s) — tocá uno para autocompletar:`;
+  resultsEl.innerHTML = titleSearchResultsData.map((r, i) => `
+    <div class="title-search-result" onclick="selectTitleSearchResult(${i})">
+      <div class="title-search-result-cover" style="${r.imageUrl ? `background-image:url('${r.imageUrl}')` : ''}">${r.imageUrl ? '' : '🎬'}</div>
+      <div class="title-search-result-info">
+        <div class="title-search-result-name">${escapeHtml(r.title)}</div>
+        <div class="title-search-result-sub">${escapeHtml(r.subtitle || '')}</div>
+      </div>
+    </div>`).join('');
+}
+window.runTitleSearch = runTitleSearch;
+
+async function selectTitleSearchResult(idx){
+  const r = titleSearchResultsData[idx];
+  if(!r) return;
+  const statusEl = document.getElementById('titleSearchStatus');
+  statusEl.textContent = 'Cargando datos...';
+
+  let genres = r.genres || [];
+  let episodes = r.episodes;
+  let durationMin = r.durationMin;
+  let isAnimated = r.source === 'jikan';
+
+  if(r.source === 'tmdb'){
+    try{
+      const detailUrl = `https://api.themoviedb.org/3/${r.tmdbMediaType}/${r.tmdbId}?api_key=${encodeURIComponent(settings.tmdbApiKey)}&language=es-ES`;
+      const res = await fetch(detailUrl);
+      if(res.ok){
+        const detail = await res.json();
+        genres = (detail.genres || []).map(g => g.name);
+        isAnimated = genres.some(g => normalizeGenreKey(g) === 'animacion');
+        if(r.tmdbMediaType === 'movie'){
+          durationMin = detail.runtime || null;
+        } else {
+          episodes = detail.number_of_episodes || null;
+          durationMin = (detail.episode_run_time && detail.episode_run_time[0]) || null;
+        }
+      }
+    }catch(err){ console.warn('No se pudo obtener el detalle de TMDB:', err); }
+  }
+
+  const mappedGenres = [...new Set(genres.map(mapExternalGenre).filter(Boolean))];
+  const type = isAnimated ? 'animada' : 'live';
+
+  let coverValue = null;
+  if(r.imageUrl){
+    statusEl.textContent = 'Descargando portada...';
+    coverValue = await fetchImageAsDataUrl(r.imageUrl);
+  }
+
+  await applyTitleSearchResult({ title: r.title, genres: mappedGenres, type, episodes, durationMin, cover: coverValue });
+  closeTitleSearch();
+}
+window.selectTitleSearchResult = selectTitleSearchResult;
+
+async function applyTitleSearchResult(data){
+  if(titleSearchContext === 'series'){
+    document.getElementById('fSerie').value = data.title;
+    if(data.genres.length) document.getElementById('fGenero').value = data.genres[0];
+    if(data.type) document.getElementById('fTipo').value = data.type;
+    if(data.durationMin) document.getElementById('fDuracion').value = data.durationMin;
+    pendingApiGenresSeries = data.genres;
+    pendingApiEpisodesSeries = data.episodes || null;
+    if(data.cover) covers[seriesKey(data.title)] = data.cover;
+    render();
+  } else {
+    document.getElementById('mTitle').value = data.title;
+    if(data.genres.length) document.getElementById('mGenero').value = data.genres[0];
+    if(data.type) document.getElementById('mTipo').value = data.type;
+    if(data.durationMin) document.getElementById('mDuracion').value = data.durationMin;
+    pendingApiGenresMovie = data.genres;
+    if(data.cover) movieCovers[seriesKey(data.title)] = data.cover;
+    renderMovies();
+  }
+  await saveAll();
+}
+
+document.getElementById('btnSearchSerie').addEventListener('click', () => openTitleSearch('series'));
+document.getElementById('btnSearchMovie').addEventListener('click', () => openTitleSearch('movie'));
+document.getElementById('titleSearchModalClose').addEventListener('click', closeTitleSearch);
+document.getElementById('titleSearchGoBtn').addEventListener('click', runTitleSearch);
+document.getElementById('titleSearchInput').addEventListener('keydown', (e) => { if(e.key === 'Enter') runTitleSearch(); });
+document.getElementById('titleSearchModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'titleSearchModalOverlay') closeTitleSearch();
+});
 document.getElementById('durationModalClose').addEventListener('click', closeDurationSettings);
 document.getElementById('durationModalSave').addEventListener('click', saveDurationSettings);
 document.getElementById('durationModalOverlay').addEventListener('click', (e) => {
@@ -3335,6 +3635,14 @@ async function addEntry(){
   if(generoVal){ genres[key] = genres[key] || []; if(!genres[key].includes(generoVal)) genres[key].push(generoVal); }
   if(tipoVal) types[key] = tipoVal;
   if(duracionVal > 0) seriesDuration[key] = duracionVal;
+  // Géneros y meta de episodios traídos de Jikan/TMDB (si se buscó el título antes de registrar)
+  if(pendingApiGenresSeries && pendingApiGenresSeries.length){
+    genres[key] = genres[key] || [];
+    pendingApiGenresSeries.forEach(g => { if(!genres[key].includes(g)) genres[key].push(g); });
+  }
+  if(pendingApiEpisodesSeries > 0 && !seriesGoals[key]) seriesGoals[key] = pendingApiEpisodesSeries;
+  pendingApiGenresSeries = null;
+  pendingApiEpisodesSeries = null;
 
   // Si la serie estaba en pendientes, al registrar su primer capítulo se quita de esa lista automáticamente
   const hadPending = pending.some(p => seriesKey(p.serie) === key);
@@ -3971,6 +4279,12 @@ async function addMovieEntry(){
   if(mTipoVal) movieTypes[mKey] = mTipoVal;
   if(mDuracionVal > 0) movieDuration[mKey] = mDuracionVal;
   if(mFranquiciaVal && mFranquiciaVal !== '__new__' && franchises[mFranquiciaVal]) movieSagas[mKey] = mFranquiciaVal;
+  // Géneros traídos de TMDB/Jikan (si se buscó el título antes de registrar)
+  if(pendingApiGenresMovie && pendingApiGenresMovie.length){
+    movieGenres[mKey] = movieGenres[mKey] || [];
+    pendingApiGenresMovie.forEach(g => { if(!movieGenres[mKey].includes(g)) movieGenres[mKey].push(g); });
+  }
+  pendingApiGenresMovie = null;
 
   renderMovies();
   await saveAll();
