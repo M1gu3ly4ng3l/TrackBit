@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Bitácora de Series y Películas</title>
 
-<!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e1216">
 <meta name="mobile-web-app-capable" content="yes">
@@ -46,7 +45,6 @@ body{
   padding:28px 20px 60px;
 }
 
-/* ---------- Header : deck faceplate ---------- */
 .deck{
   background:linear-gradient(180deg,#181e25,#12161b);
   border:1px solid var(--line);
@@ -247,7 +245,6 @@ body{
 .genre-check-pill input{ accent-color:var(--rewatch); cursor:pointer; }
 .genre-check-pill.checked{ border-color:var(--rewatch); color:var(--text); background:rgba(167,139,250,0.08); }
 
-/* ---------- Tabs ---------- */
 .tab-bar-spacer{ display:none; }
 .tab-bar{
   display:flex; gap:8px;
@@ -280,6 +277,18 @@ body{
 .tab-btn.achievements-tab.active{ border-color:#f0a840; }
 .tab-icon{ margin-right:6px; }
 
+/* ---------- Búsqueda global (botón flotante) ---------- */
+#globalSearchFab{
+  position:fixed; right:20px; bottom:24px; z-index:520;
+  width:52px; height:52px; border-radius:50%;
+  background:linear-gradient(135deg, var(--tape), #2fae63);
+  border:none; color:#0e1216; font-size:20px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.4);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+}
+#globalSearchFab:hover{ filter:brightness(1.08); }
+#globalSearchFab:active{ transform:scale(0.96); }
+
 /* En pantallas de celular, la tab-bar se vuelve una barra de navegación
    inferior fija, al estilo de una app nativa. */
 @media (max-width:780px){
@@ -303,6 +312,10 @@ body{
   .tab-icon{ margin-right:0; font-size:18px; line-height:1; }
   .tab-label{ line-height:1; }
   .toast-container{ bottom:calc(72px + env(safe-area-inset-bottom)); }
+  #globalSearchFab{
+    bottom:calc(64px + env(safe-area-inset-bottom) + 16px); right:16px;
+    width:48px; height:48px; font-size:18px;
+  }
   .toolbar{
     display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:stretch;
   }
@@ -324,7 +337,7 @@ body{
 .streak-banner.zero{ border-color:var(--line); }
 .streak-banner.zero .streak-fire{ filter:none; opacity:0.4; }
 
-/* ---------- Mapa de actividad (heatmap) ---------- */
+/* ---------- Mapa de actividad ---------- */
 .activity-header{
   display:flex; align-items:center; justify-content:space-between;
   margin-bottom:14px; flex-wrap:wrap; gap:10px;
@@ -422,13 +435,11 @@ body{
 .random-modal-actions .btn-secondary{ flex:1; }
 .random-modal-actions .btn-record{ flex:1; margin-top:0; }
 
-/* ---------- Diálogo genérico (alert/confirm/prompt) ---------- */
 #dialogTitle{ margin-bottom:8px; }
 #dialogMessage{ margin-bottom:2px; }
 #dialogInputWrap{ margin-top:14px; }
 #dialogInputWrap input{ text-align:center; }
 
-/* ---------- Form panel ---------- */
 .panel{
   background:var(--bg-panel);
   border:1px solid var(--line);
@@ -1678,6 +1689,20 @@ body{
       </div>
       <div id="trashList"></div>
       <button class="btn-record" id="trashEmptyAll" style="margin-top:14px; background:var(--rec);">🗑️ Vaciar papelera</button>
+    </div>
+  </div>
+
+  <button type="button" id="globalSearchFab" title="Buscar en toda la bitácora" aria-label="Buscar en series y películas">🔍</button>
+
+  <div class="modal-overlay" id="globalSearchModalOverlay" style="display:none;">
+    <div class="modal-card" style="max-width:420px;">
+      <button class="wrapped-close" id="globalSearchModalClose" title="Cerrar">✕</button>
+      <div class="panel-label">🔍 Buscar en toda la bitácora</div>
+      <div class="field full-row">
+        <input type="text" id="globalSearchInput" placeholder="Buscar serie o película..." autocomplete="off">
+      </div>
+      <div id="globalSearchResults" style="display:flex; flex-direction:column; gap:8px; max-height:52vh; overflow-y:auto; margin-top:10px;"></div>
+      <div class="activity-detail-empty" id="globalSearchEmptyMsg" style="margin-top:8px;">Escribí algo para buscar.</div>
     </div>
   </div>
 
@@ -3460,6 +3485,132 @@ function jumpToSerie(name, nextSeason = '', nextEpisode = ''){
 }
 window.jumpToSerie = jumpToSerie;
 
+/* ========================= BÚSQUEDA GLOBAL (series + películas, desde cualquier pestaña) ========================= */
+let globalSearchMatches = [];
+
+function buildGlobalSearchIndex(){
+  const items = [];
+
+  const seriesNames = [...new Set(entries.map(e => e.serie.trim()))];
+  seriesNames.forEach(name => {
+    const key = seriesKey(name);
+    const count = entries.filter(e => seriesKey(e.serie) === key).length;
+    items.push({
+      kind: 'series',
+      groupName: name,
+      matchNames: [name],
+      cover: covers[key] || null,
+      badge: `${count} ${count === 1 ? 'episodio' : 'episodios'}`,
+      extra: STATUS_LABELS[getStatus(name)] || ''
+    });
+  });
+
+  const { groups, order } = groupMovieEntries(movieEntries);
+  order.forEach(groupKey => {
+    const g = groups[groupKey];
+    const dispKey = seriesKey(g.displayName);
+    const matchNames = g.isFranchise ? [g.displayName, ...g.items.map(e => e.title.trim())] : [g.displayName];
+    const distinctTitles = new Set(g.items.map(e => seriesKey(e.title))).size;
+    items.push({
+      kind: 'movie',
+      groupName: g.displayName,
+      matchNames,
+      cover: movieCovers[dispKey] || null,
+      badge: g.isFranchise ? `${distinctTitles} películas` : `${g.items.length} ${g.items.length === 1 ? 'visionado' : 'visionados'}`,
+      extra: g.isFranchise ? '🎞️ Franquicia' : ''
+    });
+  });
+
+  return items;
+}
+
+function openGlobalSearch(){
+  document.getElementById('globalSearchInput').value = '';
+  document.getElementById('globalSearchResults').innerHTML = '';
+  document.getElementById('globalSearchEmptyMsg').textContent = 'Escribí algo para buscar.';
+  document.getElementById('globalSearchEmptyMsg').style.display = 'block';
+  globalSearchMatches = [];
+  document.getElementById('globalSearchModalOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('globalSearchInput').focus(), 30);
+}
+function closeGlobalSearch(){
+  document.getElementById('globalSearchModalOverlay').style.display = 'none';
+}
+window.openGlobalSearch = openGlobalSearch;
+
+function runGlobalSearch(){
+  const query = document.getElementById('globalSearchInput').value.trim().toLowerCase();
+  const resultsEl = document.getElementById('globalSearchResults');
+  const emptyEl = document.getElementById('globalSearchEmptyMsg');
+
+  if(!query){
+    resultsEl.innerHTML = '';
+    globalSearchMatches = [];
+    emptyEl.textContent = 'Escribí algo para buscar.';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  const index = buildGlobalSearchIndex();
+  globalSearchMatches = index.filter(item => item.matchNames.some(n => n.toLowerCase().includes(query)));
+
+  if(!globalSearchMatches.length){
+    resultsEl.innerHTML = '';
+    emptyEl.textContent = 'Sin resultados.';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  resultsEl.innerHTML = globalSearchMatches.map((item, i) => `
+    <div class="title-search-result" onclick="goToGlobalSearchResult(${i})">
+      <div class="title-search-result-cover" style="${item.cover ? `background-image:url('${item.cover}')` : ''}">${item.cover ? '' : (item.kind === 'series' ? '📺' : '🎬')}</div>
+      <div class="title-search-result-info">
+        <div class="title-search-result-name">${escapeHtml(item.groupName)}</div>
+        <div class="title-search-result-sub">${item.kind === 'series' ? '📺 Serie' : '🎬 Película'} · ${escapeHtml(item.badge)}${item.extra ? ' · ' + escapeHtml(item.extra) : ''}</div>
+      </div>
+    </div>`).join('');
+}
+window.runGlobalSearch = runGlobalSearch;
+
+function goToGlobalSearchResult(idx){
+  const item = globalSearchMatches[idx];
+  if(!item) return;
+  closeGlobalSearch();
+  const key = seriesKey(item.groupName);
+
+  if(item.kind === 'series'){
+    switchMainTab('series');
+    switchSeriesSub('log');
+    if(!expandedSeries.has(key)){
+      expandedSeries.add(key);
+      playFolderMusic('series:' + key, (folderMusic[key] || {}).dataUrl);
+    }
+    render();
+  } else {
+    switchMainTab('peliculas');
+    switchMovieSub('log');
+    if(!expandedMovies.has(key)){
+      expandedMovies.add(key);
+      playFolderMusic('movie:' + key, (movieFolderMusic[key] || {}).dataUrl);
+    }
+    renderMovies();
+  }
+
+  setTimeout(() => {
+    const el = document.querySelector(`.series-group[data-group-key="${CSS.escape(key)}"]`);
+    if(el) el.scrollIntoView({ behavior:'smooth', block:'center' });
+  }, 80);
+}
+window.goToGlobalSearchResult = goToGlobalSearchResult;
+
+document.getElementById('globalSearchFab').addEventListener('click', openGlobalSearch);
+document.getElementById('globalSearchModalClose').addEventListener('click', closeGlobalSearch);
+document.getElementById('globalSearchModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'globalSearchModalOverlay') closeGlobalSearch();
+});
+document.getElementById('globalSearchInput').addEventListener('input', runGlobalSearch);
+
 function render(){
   renderContinueWatching();
   updateSerieList();
@@ -3591,7 +3742,7 @@ function render(){
         </div>` : '';
 
     return `
-      <div class="series-group">
+      <div class="series-group" data-group-key="${seriesKey(serie)}">
         <div class="series-header" onclick="toggleExpand(decodeURIComponent('${encodeURIComponent(serie)}'))">
           <div class="series-name">
             <span class="series-chevron ${isOpen ? 'open' : ''}">▸</span>
@@ -4109,6 +4260,28 @@ function updateMovieList(){
   list.innerHTML = names.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
 }
 
+// Si una película pertenece a una franquicia, entra en la carpeta única de esa franquicia
+// en vez de tener su propia carpeta por título. Se usa tanto en renderMovies como en la búsqueda global.
+function groupMovieEntries(list){
+  const groups = {}; const order = [];
+  list.forEach(e => {
+    const titleKey = seriesKey(e.title);
+    const fKey = movieSagas[titleKey] || null;
+    const groupKey = fKey || ('title:' + titleKey);
+    if(!groups[groupKey]){
+      groups[groupKey] = {
+        isFranchise: !!fKey,
+        franchiseKey: fKey,
+        displayName: fKey ? getFranchiseName(fKey) : e.title.trim(),
+        items: []
+      };
+      order.push(groupKey);
+    }
+    groups[groupKey].items.push(e);
+  });
+  return { groups, order };
+}
+
 function renderMovies(){
   updateMovieList();
   const container = document.getElementById('movieLogContainer');
@@ -4139,22 +4312,7 @@ function renderMovies(){
 
   // Si una película pertenece a una franquicia, entra en la carpeta única de esa franquicia
   // en vez de tener su propia carpeta por título.
-  const groups = {}; const order = [];
-  filtered.forEach(e => {
-    const titleKey = seriesKey(e.title);
-    const fKey = movieSagas[titleKey] || null;
-    const groupKey = fKey || ('title:' + titleKey);
-    if(!groups[groupKey]){
-      groups[groupKey] = {
-        isFranchise: !!fKey,
-        franchiseKey: fKey,
-        displayName: fKey ? getFranchiseName(fKey) : e.title.trim(),
-        items: []
-      };
-      order.push(groupKey);
-    }
-    groups[groupKey].items.push(e);
-  });
+  const { groups, order } = groupMovieEntries(filtered);
 
   const sortMode = document.getElementById('mSortFilter').value;
   if(sortMode === 'nombre'){
@@ -4243,7 +4401,7 @@ function renderMovies(){
     }
 
     return `
-      <div class="series-group">
+      <div class="series-group" data-group-key="${dispKey}">
         <div class="series-header" onclick="toggleMovieExpand(decodeURIComponent('${encodeURIComponent(displayName)}'))">
           <div class="series-name">
             <span class="series-chevron ${isOpen ? 'open' : ''}">▸</span>
