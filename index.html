@@ -836,6 +836,13 @@ body{
 }
 .goal-btn:hover{ opacity:1; border-color:var(--tape); }
 .goal-btn.has{ border-style:solid; border-color:var(--tape); opacity:1; }
+.link-btn{
+  flex-shrink:0; width:34px; height:34px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  background:none; border:1px dashed var(--line); cursor:pointer; font-size:14px; opacity:0.55;
+}
+.link-btn:hover{ opacity:1; border-color:#4aa8e8; }
+.link-btn.has{ border-style:solid; border-color:#4aa8e8; opacity:1; }
 .genre-edit-btn{
   font-size:11px;
   color:var(--text-dim);
@@ -1000,6 +1007,19 @@ body{
   margin-bottom:8px;
 }
 .cw-name{ font-family:'Oswald', sans-serif; font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.upcoming-list{ display:flex; flex-direction:column; gap:6px; }
+.upcoming-row{
+  display:flex; align-items:center; gap:10px; padding:9px 12px;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:8px;
+}
+.upcoming-icon{ font-size:15px; flex-shrink:0; }
+.upcoming-text{ flex:1; min-width:0; font-size:12.5px; color:var(--text-dim); line-height:1.4; }
+.upcoming-text b{ color:var(--tape); font-weight:600; }
+.upcoming-date{
+  font-size:11px; color:var(--bg); background:var(--tape); font-weight:700;
+  padding:3px 8px; border-radius:10px; flex-shrink:0; white-space:nowrap;
+}
 .cw-last{ font-size:10.5px; color:var(--text-dim); margin-top:3px; }
 .cw-quick-btn{
   width:100%; margin-top:8px; padding:7px 6px; border-radius:7px;
@@ -1175,6 +1195,11 @@ body{
   <div class="panel continue-watching" id="continueWatchingPanel" style="display:none;">
     <div class="panel-label">▶ Continuar viendo</div>
     <div class="cw-list" id="continueWatchingList"></div>
+  </div>
+
+  <div class="panel upcoming-releases" id="upcomingPanel" style="display:none;">
+    <div class="panel-label">🗓️ Próximos estrenos</div>
+    <div class="upcoming-list" id="upcomingList"></div>
   </div>
 
   <div class="tab-bar">
@@ -2018,7 +2043,10 @@ let seriesApiLink = {};   // { serieKeyLower: {source:'jikan'|'tmdb', malId, tmd
 let pendingApiGenresSeries = null;
 let pendingApiEpisodesSeries = null;
 let pendingApiGenresMovie = null;
+let pendingApiCollectionId = null;
+let pendingApiCollectionName = null;
 let titleSearchContext = null; // 'series' | 'movie'
+let titleSearchLinkTarget = null; // si no es null, la búsqueda es para vincular ESTA carpeta existente (no para llenar el formulario de registro)
 let titleSearchResultsData = [];
 const DEFAULT_SETTINGS = {
   episodeLive: 45, episodeAnimada: 24, episodeDefault: 30,
@@ -2373,6 +2401,7 @@ async function loadAll(){
   if(abandonedChanged || trashPurged || hadInlineAudioToMigrate) await saveAll();
   checkBackupReminder();
   autoRefreshLinkedSeriesGoals(); // en segundo plano, no bloquea el arranque
+  refreshUpcomingReleases(); // ídem: próximos estrenos, no bloquea el arranque
 }
 
 async function saveAll(){
@@ -3107,14 +3136,17 @@ async function fetchImageAsDataUrl(url){
   }
 }
 
-function openTitleSearch(kind){
+function openTitleSearch(kind, linkTarget){
   titleSearchContext = kind;
-  document.getElementById('titleSearchModalTitle').textContent = kind === 'series' ? '🔍 Buscar serie/anime' : '🔍 Buscar película';
+  titleSearchLinkTarget = linkTarget || null;
+  document.getElementById('titleSearchModalTitle').textContent = linkTarget
+    ? `🔗 Vincular "${linkTarget}"`
+    : (kind === 'series' ? '🔍 Buscar serie/anime' : '🔍 Buscar película');
   document.getElementById('titleSearchSourceRow').style.display = kind === 'series' ? 'flex' : 'none';
   document.querySelector('input[name="titleSearchSource"][value="' + (kind === 'series' ? 'jikan' : 'tmdb') + '"]').checked = true;
-  const currentTitle = kind === 'series' ? document.getElementById('fSerie').value.trim() : document.getElementById('mTitle').value.trim();
+  const currentTitle = linkTarget || (kind === 'series' ? document.getElementById('fSerie').value.trim() : document.getElementById('mTitle').value.trim());
   document.getElementById('titleSearchInput').value = currentTitle;
-  document.getElementById('titleSearchStatus').textContent = '';
+  document.getElementById('titleSearchStatus').textContent = linkTarget ? 'Buscá el título correcto y elegilo — no hace falta que el nombre coincida con el de tu carpeta.' : '';
   document.getElementById('titleSearchResults').innerHTML = '';
   titleSearchResultsData = [];
   document.getElementById('titleSearchModalOverlay').style.display = 'flex';
@@ -3122,6 +3154,7 @@ function openTitleSearch(kind){
 }
 function closeTitleSearch(){
   document.getElementById('titleSearchModalOverlay').style.display = 'none';
+  titleSearchLinkTarget = null;
 }
 window.openTitleSearch = openTitleSearch;
 
@@ -3215,6 +3248,8 @@ async function selectTitleSearchResult(idx){
   let episodes = r.episodes;
   let durationMin = r.durationMin;
   let isAnimated = r.source === 'jikan';
+  let collectionId = null;
+  let collectionName = null;
 
   if(r.source === 'tmdb'){
     try{
@@ -3226,6 +3261,10 @@ async function selectTitleSearchResult(idx){
         isAnimated = genres.some(g => normalizeGenreKey(g) === 'animacion');
         if(r.tmdbMediaType === 'movie'){
           durationMin = detail.runtime || null;
+          if(detail.belongs_to_collection){
+            collectionId = detail.belongs_to_collection.id;
+            collectionName = detail.belongs_to_collection.name;
+          }
         } else {
           episodes = detail.number_of_episodes || null;
           durationMin = (detail.episode_run_time && detail.episode_run_time[0]) || null;
@@ -3247,12 +3286,30 @@ async function selectTitleSearchResult(idx){
     ? { source:'jikan', malId:r.malId }
     : { source:'tmdb', tmdbId:r.tmdbId, tmdbMediaType:r.tmdbMediaType };
 
-  await applyTitleSearchResult({ title: r.title, genres: mappedGenres, type, episodes, durationMin, cover: coverValue, apiLink });
+  await applyTitleSearchResult({ title: r.title, genres: mappedGenres, type, episodes, durationMin, cover: coverValue, apiLink, collectionId, collectionName });
   closeTitleSearch();
 }
 window.selectTitleSearchResult = selectTitleSearchResult;
 
 async function applyTitleSearchResult(data){
+  if(titleSearchLinkTarget){
+    const key = seriesKey(titleSearchLinkTarget);
+    if(data.genres.length){
+      genres[key] = genres[key] || [];
+      data.genres.forEach(g => { if(!genres[key].includes(g)) genres[key].push(g); });
+    }
+    if(data.type) types[key] = data.type;
+    if(data.durationMin) seriesDuration[key] = data.durationMin;
+    if(data.cover) covers[key] = data.cover;
+    if(data.episodes) seriesGoals[key] = data.episodes;
+    if(data.apiLink) seriesApiLink[key] = { ...data.apiLink, lastChecked: Date.now() };
+    notifyAutoCompleted(autoCompleteFinishedSeries());
+    render();
+    await saveAll();
+    await customAlert(`"${titleSearchLinkTarget}" quedó vinculada${data.episodes ? ` (meta actualizada a ${data.episodes} capítulos)` : ''}. A partir de ahora su meta se va a poder actualizar sola.`, { icon:'🔗', title:'Vinculado' });
+    titleSearchLinkTarget = null;
+    return;
+  }
   if(titleSearchContext === 'series'){
     document.getElementById('fSerie').value = data.title;
     if(data.genres.length) document.getElementById('fGenero').value = data.genres[0];
@@ -3269,6 +3326,8 @@ async function applyTitleSearchResult(data){
     if(data.type) document.getElementById('mTipo').value = data.type;
     if(data.durationMin) document.getElementById('mDuracion').value = data.durationMin;
     pendingApiGenresMovie = data.genres;
+    pendingApiCollectionId = data.collectionId || null;
+    pendingApiCollectionName = data.collectionName || null;
     if(data.cover) movieCovers[seriesKey(data.title)] = data.cover;
     renderMovies();
   }
@@ -3813,6 +3872,176 @@ async function autoRefreshLinkedSeriesGoals(){
   await saveAll();
 }
 
+/* ========================= PRÓXIMOS ESTRENOS (Jikan/TMDB) ========================= */
+let upcomingEpisodes = []; // [{name, dateIso, label}]
+let upcomingMovies = [];   // [{franchiseName, title, dateIso}]
+
+function fmtDayMonth(iso){
+  if(!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}`;
+}
+
+function getDisplayNameForSeriesKey(key){
+  const found = entries.find(e => seriesKey(e.serie) === key);
+  return found ? found.serie : key;
+}
+
+function nextWeekdayDate(weekdayName, hh, mm){
+  // Jikan da el día en inglés (ej. "Thursdays"). Es un cálculo aproximado: no ajusta
+  // por zona horaria (JST vs. la del dispositivo), así que puede fallar por un día
+  // justo en el límite entre emisiones.
+  const map = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
+  const clean = (weekdayName || '').toLowerCase().replace(/s$/, '');
+  const idx = map[clean];
+  if(idx === undefined) return null;
+
+  const now = new Date();
+  let diff = (idx - now.getDay() + 7) % 7;
+  if(diff === 0 && hh !== null){
+    if(now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm)) diff = 7;
+  }
+  const result = new Date(now);
+  result.setDate(now.getDate() + diff);
+  return result;
+}
+
+async function fetchNextEpisodeInfo(link){
+  if(link.source === 'tmdb' && link.tmdbId){
+    if(!settings.tmdbApiKey) return null;
+    const res = await fetch(`https://api.themoviedb.org/3/tv/${link.tmdbId}?api_key=${encodeURIComponent(settings.tmdbApiKey)}&language=es-ES`);
+    if(!res.ok) return null;
+    const detail = await res.json();
+    const next = detail.next_episode_to_air;
+    if(!next || !next.air_date) return null;
+    return { dateIso: next.air_date, label: `T${next.season_number} E${next.episode_number}` };
+  }
+  if(link.source === 'jikan' && link.malId){
+    const res = await fetch(`https://api.jikan.moe/v4/anime/${link.malId}`);
+    if(!res.ok) return null;
+    const anime = (await res.json()).data;
+    if(!anime || anime.status !== 'Currently Airing' || !anime.broadcast || !anime.broadcast.day) return null;
+    let hh = null, mm = null;
+    if(anime.broadcast.time){
+      const parts = anime.broadcast.time.split(':');
+      hh = parseInt(parts[0], 10); mm = parseInt(parts[1], 10);
+    }
+    const d = nextWeekdayDate(anime.broadcast.day, hh, mm);
+    if(!d) return null;
+    return { dateIso: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, label: null };
+  }
+  return null;
+}
+
+async function ensureFranchiseTmdbCollection(fKey){
+  const f = franchises[fKey];
+  if(!f || !settings.tmdbApiKey) return null;
+  if(f.tmdbCollectionId) return f.tmdbCollectionId;
+  try{
+    const res = await fetch(`https://api.themoviedb.org/3/search/collection?api_key=${encodeURIComponent(settings.tmdbApiKey)}&language=es-ES&query=${encodeURIComponent(f.name)}`);
+    if(!res.ok) return null;
+    const data = await res.json();
+    const top = data.results && data.results[0];
+    if(top){
+      f.tmdbCollectionId = top.id;
+      return top.id;
+    }
+  }catch(err){ console.warn('No se pudo buscar la colección de TMDB para', f.name, err); }
+  return null;
+}
+
+async function fetchFranchiseUpcoming(fKey){
+  const collectionId = await ensureFranchiseTmdbCollection(fKey);
+  if(!collectionId) return null;
+  const res = await fetch(`https://api.themoviedb.org/3/collection/${collectionId}?api_key=${encodeURIComponent(settings.tmdbApiKey)}&language=es-ES`);
+  if(!res.ok) return null;
+  const data = await res.json();
+  const today = todayIsoDate();
+  // Excluimos tanto lo etiquetado a esta franquicia como cualquier título ya registrado en general
+  // (por si se agregó sin marcarlo como parte de la franquicia).
+  const registeredTitleKeys = new Set([
+    ...Object.keys(movieSagas).filter(t => movieSagas[t] === fKey),
+    ...movieEntries.map(e => seriesKey(e.title))
+  ]);
+
+  const upcoming = (data.parts || [])
+    .filter(p => p.release_date && p.release_date >= today)
+    .filter(p => !registeredTitleKeys.has(seriesKey(p.title)))
+    .sort((a, b) => a.release_date.localeCompare(b.release_date));
+
+  return upcoming[0] || null;
+}
+
+function renderUpcomingPanel(){
+  const panel = document.getElementById('upcomingPanel');
+  const list = document.getElementById('upcomingList');
+  const items = [];
+
+  upcomingEpisodes.forEach(e => items.push({
+    icon: '📺',
+    html: `El próximo capítulo${e.label ? ' (' + escapeHtml(e.label) + ')' : ''} de <b>${escapeHtml(e.name)}</b> sale`,
+    dateIso: e.dateIso
+  }));
+  upcomingMovies.forEach(m => items.push({
+    icon: '🎬',
+    html: `<b>${escapeHtml(m.title)}</b> (${escapeHtml(m.franchiseName)}) estrena`,
+    dateIso: m.dateIso
+  }));
+  items.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+
+  if(!items.length){ panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  list.innerHTML = items.map(it => `
+    <div class="upcoming-row">
+      <span class="upcoming-icon">${it.icon}</span>
+      <span class="upcoming-text">${it.html}</span>
+      <span class="upcoming-date">${fmtDayMonth(it.dateIso)}</span>
+    </div>`).join('');
+}
+
+async function refreshUpcomingReleases(){
+  const THROTTLE_MS = 20 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  const episodes = [];
+  for(const key of Object.keys(seriesApiLink)){
+    if((status[key] || 'curso') !== 'curso') continue;
+    const link = seriesApiLink[key];
+    if(link.lastEpisodeCheck && (now - link.lastEpisodeCheck) < THROTTLE_MS){
+      if(link.cachedNextEpisode) episodes.push({ name: getDisplayNameForSeriesKey(key), ...link.cachedNextEpisode });
+      continue;
+    }
+    try{
+      const info = await fetchNextEpisodeInfo(link);
+      link.lastEpisodeCheck = now;
+      link.cachedNextEpisode = info || null;
+      if(info) episodes.push({ name: getDisplayNameForSeriesKey(key), ...info });
+    }catch(err){ console.warn('No se pudo revisar el próximo episodio de', key, err); }
+  }
+
+  const movies = [];
+  if(settings.tmdbApiKey){
+    for(const fKey of Object.keys(franchises)){
+      const f = franchises[fKey];
+      if(f.lastUpcomingCheck && (now - f.lastUpcomingCheck) < THROTTLE_MS){
+        if(f.cachedUpcoming) movies.push({ franchiseName: f.name, title: f.cachedUpcoming.title, dateIso: f.cachedUpcoming.dateIso });
+        continue;
+      }
+      try{
+        const next = await fetchFranchiseUpcoming(fKey);
+        f.lastUpcomingCheck = now;
+        f.cachedUpcoming = next ? { title: next.title, dateIso: next.release_date } : null;
+        if(next) movies.push({ franchiseName: f.name, title: next.title, dateIso: next.release_date });
+      }catch(err){ console.warn('No se pudo revisar estrenos de la franquicia', fKey, err); }
+    }
+  }
+
+  upcomingEpisodes = episodes.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+  upcomingMovies = movies.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+  renderUpcomingPanel();
+  await saveAll();
+}
+
 async function toggleStatus(name){
   const key = seriesKey(name);
   const idx = STATUS_ORDER.indexOf(getStatus(name));
@@ -4299,6 +4528,9 @@ function render(){
             <span class="goal-btn ${goal > 0 ? 'has' : ''}"
                   onclick="event.stopPropagation(); setSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))"
                   title="${goal > 0 ? 'Editar meta de capítulos (' + goal + ')' : 'Definir total de capítulos para ver el progreso'}">🎯</span>
+            <span class="link-btn ${isLinked ? 'has' : ''}"
+                  onclick="event.stopPropagation(); openTitleSearch('series', decodeURIComponent('${encodeURIComponent(serie)}'))"
+                  title="${isLinked ? 'Vinculada a ' + (seriesApiLink[seriesKey(serie)].source === 'jikan' ? 'Jikan/MAL' : 'TMDB') + ' — tocar para cambiar' : 'Vincular con Jikan/TMDB (no depende de que el nombre coincida)'}">🔗</span>
             <button class="status-toggle ${st}" onclick="event.stopPropagation(); toggleStatus(decodeURIComponent('${encodeURIComponent(serie)}'))">${STATUS_LABELS[st]}</button>
           </div>
         </div>
@@ -5029,12 +5261,20 @@ async function addMovieEntry(){
   if(mTipoVal) movieTypes[mKey] = mTipoVal;
   if(mDuracionVal > 0) movieDuration[mKey] = mDuracionVal;
   if(mFranquiciaVal && mFranquiciaVal !== '__new__' && franchises[mFranquiciaVal]) movieSagas[mKey] = mFranquiciaVal;
+  // Si la película se vinculó por búsqueda de TMDB y pertenece a una colección, la guardamos en
+  // la franquicia asignada — es mucho más confiable que buscar la colección por el nombre corto
+  // que le puso el usuario a la franquicia (ej. "UCM" no matchea "Marvel Cinematic Universe").
+  if(mFranquiciaVal && franchises[mFranquiciaVal] && pendingApiCollectionId){
+    franchises[mFranquiciaVal].tmdbCollectionId = pendingApiCollectionId;
+  }
   // Géneros traídos de TMDB/Jikan (si se buscó el título antes de registrar)
   if(pendingApiGenresMovie && pendingApiGenresMovie.length){
     movieGenres[mKey] = movieGenres[mKey] || [];
     pendingApiGenresMovie.forEach(g => { if(!movieGenres[mKey].includes(g)) movieGenres[mKey].push(g); });
   }
   pendingApiGenresMovie = null;
+  pendingApiCollectionId = null;
+  pendingApiCollectionName = null;
 
   renderMovies();
   await saveAll();
