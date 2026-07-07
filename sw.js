@@ -62,7 +62,9 @@ self.addEventListener('fetch', (event) => {
       });
     })
   );
-  // Al tocar una notificación, enfoca la pestaña de la app si ya está abierta, o abre una nueva si no.
+});
+
+// Al tocar una notificación, enfoca la pestaña de la app si ya está abierta, o abre una nueva si no.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
