@@ -87,6 +87,50 @@ body{
   animation:blink 1.6s infinite;
 }
 @keyframes blink{ 0%,55%{opacity:1;} 56%,100%{opacity:0.25;} }
+
+.profile-btn{
+  display:flex; align-items:center; gap:6px;
+  background:var(--bg-panel); border:1px solid var(--line); border-radius:20px;
+  padding:5px 12px 5px 8px; cursor:pointer; color:var(--text); font-size:12px;
+  font-family:'JetBrains Mono', monospace;
+}
+.profile-btn:hover{ border-color:#4aa8e8; }
+.profile-btn .emoji{ font-size:15px; }
+.profile-btn .avatar-photo{
+  width:20px; height:20px; border-radius:50%; background-size:cover; background-position:center;
+  flex-shrink:0; border:1px solid var(--line);
+}
+
+.profile-list{ display:flex; flex-direction:column; gap:8px; margin:14px 0; }
+.profile-row{
+  display:flex; align-items:center; gap:10px;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:10px;
+  padding:10px 12px;
+}
+.profile-row.active{ border-color:var(--tape); }
+.profile-row .emoji{ font-size:22px; flex-shrink:0; }
+.profile-row .avatar-photo{
+  width:34px; height:34px; border-radius:50%; background-size:cover; background-position:center;
+  flex-shrink:0; border:1px solid var(--line);
+}
+.profile-row .info{ flex:1; min-width:0; }
+.profile-row .pname{ font-size:13.5px; font-weight:700; color:var(--text); }
+.profile-row .ptag{ font-size:10px; color:var(--tape); letter-spacing:0.5px; }
+.profile-row .pactions{ display:flex; gap:6px; flex-shrink:0; }
+.profile-new-row{ display:flex; gap:8px; margin-top:6px; }
+.profile-new-row input{ flex:1; }
+.profile-photo-row{ display:flex; align-items:center; gap:10px; margin:6px 0; }
+.profile-photo-preview{
+  width:44px; height:44px; border-radius:50%; background:var(--bg-card); border:1px solid var(--line);
+  background-size:cover; background-position:center;
+  display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;
+}
+.profile-emoji-picker{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+.profile-emoji-picker button{
+  width:36px; height:36px; border-radius:8px; background:var(--bg-card); border:1px solid var(--line);
+  font-size:17px; cursor:pointer;
+}
+.profile-emoji-picker button.selected{ border-color:var(--tape); background:rgba(74,222,128,0.1); }
 .deck-counter{
   font-family:'JetBrains Mono', monospace;
   font-size:12.5px;
@@ -1158,7 +1202,10 @@ body{
   <div class="deck">
     <div class="deck-top">
       <div class="deck-title">Bitácora</div>
-      <div class="rec-indicator"><span class="rec-dot"></span>REC</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button class="profile-btn" id="btnOpenProfiles" title="Cambiar de perfil"></button>
+        <div class="rec-indicator"><span class="rec-dot"></span>REC</div>
+      </div>
     </div>
     <div class="deck-counter">
       <div>EPISODIOS: <b id="statEpisodes">0</b></div>
@@ -1189,6 +1236,10 @@ body{
     </div>
     <div class="ios-install-hint" id="iosInstallHint" style="display:none;">
       📱 En iPhone/iPad: toca <b>Compartir</b> (el ícono del cuadrito con la flecha) y luego <b>"Agregar a pantalla de inicio"</b>.
+    </div>
+    <div class="drive-row">
+      <div class="drive-status" id="notifStatus"><span class="dot"></span><span id="notifStatusText">Notificaciones: no configuradas</span></div>
+      <button class="drive-btn" id="btnEnableNotifications">🔔 Activar avisos de estrenos</button>
     </div>
   </div>
 
@@ -1718,6 +1769,31 @@ body{
     </div>
   </div>
 
+  <div class="modal-overlay" id="profileModalOverlay" style="display:none;">
+    <div class="modal-card" style="max-width:400px;">
+      <button class="wrapped-close" id="profileModalClose" title="Cerrar">✕</button>
+      <div class="panel-label">👤 Perfiles</div>
+      <div style="font-size:11.5px; color:var(--text-dim); margin:-6px 0 4px; line-height:1.5;">
+        Cada perfil tiene su propia bitácora completa: series, películas, logros, música y su propia sincronización con Drive. Cambiar de perfil recarga la página.
+      </div>
+      <div class="profile-list" id="profileList"></div>
+      <div class="panel-label" style="font-size:11px; margin-top:6px;">✚ Crear perfil nuevo</div>
+      <div class="profile-photo-row">
+        <div class="profile-photo-preview" id="newProfilePhotoPreview">👤</div>
+        <button type="button" class="btn-mini" id="btnPickNewProfilePhoto">📷 Elegir foto</button>
+        <button type="button" class="btn-mini" id="btnClearNewProfilePhoto" style="display:none;">✕ Quitar</button>
+      </div>
+      <div style="font-size:10.5px; color:var(--text-dim); margin:-4px 0 2px;">o elegí un emoji:</div>
+      <div class="profile-emoji-picker" id="newProfileEmojiPicker"></div>
+      <div class="profile-new-row">
+        <input type="text" id="newProfileName" placeholder="Nombre (ej: Juan, Ana...)" maxlength="24">
+        <button type="button" class="btn-record" id="btnCreateProfile" style="margin-top:0;">✚ Crear</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="profilePhotoFileInput" accept="image/*" style="display:none">
+
   <div class="modal-overlay" id="discoverModalOverlay" style="display:none;">
     <div class="modal-card" style="max-width:440px;">
       <button class="wrapped-close" id="discoverModalClose" title="Cerrar">✕</button>
@@ -1922,15 +1998,47 @@ body{
 </div>
 
 <script>
-const DATA_KEY = 'bitacora-series-data';
-const OLD_KEY = 'bitacora-series-entries';
+/* ========================= PERFILES LOCALES =========================
+   Un perfil = un prefijo distinto para TODAS las claves de localStorage y una base de
+   IndexedDB y un archivo de Drive propios. Así, dos personas usando el mismo navegador
+   tienen bitácoras totalmente separadas (series, logros, Drive, música, todo), sin tocar
+   nada de la arquitectura de guardado — cada función sigue leyendo "la" clave de siempre,
+   solo que esa clave ahora puede venir con un prefijo.
+   El perfil "default" usa las claves SIN prefijo a propósito, para que quien ya venía
+   usando la app no pierda nada al actualizar: su bitácora de siempre sigue siendo la
+   del perfil "default".
+*/
+const PROFILES_KEY = 'bitacora-profiles';           // nunca se prefija
+const ACTIVE_PROFILE_KEY = 'bitacora-active-profile'; // nunca se prefija
+const DEFAULT_PROFILE = { id: 'default', name: 'Principal', emoji: '👤' };
+
+function loadProfiles(){
+  try{
+    const raw = localStorage.getItem(PROFILES_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    if(!list.some(p => p.id === 'default')) list.unshift(DEFAULT_PROFILE);
+    return list;
+  }catch(e){ return [DEFAULT_PROFILE]; }
+}
+function saveProfiles(list){
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(list));
+}
+function getActiveProfileId(){
+  return localStorage.getItem(ACTIVE_PROFILE_KEY) || 'default';
+}
+const PROFILE_ID = getActiveProfileId();
+// Prefijador: todas las claves de localStorage/IndexedDB/Drive de este archivo pasan por acá.
+function pk(base){ return PROFILE_ID === 'default' ? base : `p_${PROFILE_ID}__${base}`; }
+
+const DATA_KEY = pk('bitacora-series-data');
+const OLD_KEY = 'bitacora-series-entries'; // migración vieja: solo aplica al perfil default, se queda como estaba
 
 /* ========================= AUDIO EN INDEXEDDB (no en localStorage) =========================
    La música de carpeta vive en IndexedDB porque localStorage tiene un límite de solo 5-10MB
    en la mayoría de los navegadores, y un par de canciones ya lo llenaban por completo.
    IndexedDB soporta cientos de MB sin problema. En memoria, folderMusic/movieFolderMusic
    siguen siendo objetos normales igual que antes; solo cambia DÓNDE se guardan en disco. */
-const AUDIO_DB_NAME = 'bitacora-audio-db';
+const AUDIO_DB_NAME = pk('bitacora-audio-db');
 const AUDIO_STORE = 'audio';
 let audioDbPromise = null;
 
@@ -2505,8 +2613,8 @@ function exportBackup(){
   a.download = `bitacora-backup-${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}.json`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  localStorage.setItem('lastBackupExportIso', new Date().toISOString());
-  localStorage.removeItem('backupReminderSnoozeUntilIso');
+  localStorage.setItem(pk('lastBackupExportIso'), new Date().toISOString());
+  localStorage.removeItem(pk('backupReminderSnoozeUntilIso'));
   hideBackupReminder();
 }
 
@@ -2514,7 +2622,7 @@ async function restoreBackup(file){
   const text = await file.text();
   const parsed = JSON.parse(text);
   await applyAllData(parsed);
-  localStorage.removeItem('driveBaseSnapshot'); // el backup restaurado es una versión nueva; no comparar contra la sincronización vieja
+  localStorage.removeItem(pk('driveBaseSnapshot')); // el backup restaurado es una versión nueva; no comparar contra la sincronización vieja
   await saveAll();
 }
 
@@ -2552,10 +2660,10 @@ function checkBackupReminder(){
   const hasData = (entries.length + movieEntries.length) > 0;
   if(!hasData) return; // no molestar en una instalación recién estrenada, sin nada que respaldar
 
-  const snoozeUntil = localStorage.getItem('backupReminderSnoozeUntilIso');
+  const snoozeUntil = localStorage.getItem(pk('backupReminderSnoozeUntilIso'));
   if(snoozeUntil && new Date(snoozeUntil) > new Date()) return;
 
-  const last = localStorage.getItem('lastBackupExportIso');
+  const last = localStorage.getItem(pk('lastBackupExportIso'));
   if(!last){
     showBackupReminder('Todavía no has exportado ningún backup en JSON. Es tu respaldo de respaldo por si Google Drive llegara a fallar.');
     return;
@@ -2569,19 +2677,19 @@ function checkBackupReminder(){
 document.getElementById('backupReminderExportBtn').addEventListener('click', exportBackup);
 document.getElementById('backupReminderDismissBtn').addEventListener('click', () => {
   const snoozeUntil = new Date(Date.now() + BACKUP_SNOOZE_DAYS * 86400000);
-  localStorage.setItem('backupReminderSnoozeUntilIso', snoozeUntil.toISOString());
+  localStorage.setItem(pk('backupReminderSnoozeUntilIso'), snoozeUntil.toISOString());
   hideBackupReminder();
 });
 
 /*GOOGLE DRIVE SYNC*/
 const GOOGLE_CLIENT_ID = '918938628120-v4lf1fst2sc7cq348h777jc7i8ak77vs.apps.googleusercontent.com';
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const DRIVE_FILE_NAME = 'bitacora-datos.json';
+const DRIVE_FILE_NAME = PROFILE_ID === 'default' ? 'bitacora-datos.json' : `bitacora-datos-${PROFILE_ID}.json`;
 
 let driveTokenClient = null;
 let driveAccessToken = null;
 let driveTokenExpiresAt = 0; // epoch ms
-let driveFileId = localStorage.getItem('driveFileId') || null;
+let driveFileId = localStorage.getItem(pk('driveFileId')) || null;
 let driveSyncTimer = null;
 let driveApplyingRemote = false;
 // Evita que dos fusiones con Drive corran en simultáneo: si llega un cambio nuevo mientras
@@ -2626,7 +2734,7 @@ function buildLightweightSnapshot(fullData){
 
 function driveGetBaseSnapshot(){
   try{
-    const raw = localStorage.getItem('driveBaseSnapshot');
+    const raw = localStorage.getItem(pk('driveBaseSnapshot'));
     if(!raw) return null;
     const parsed = JSON.parse(raw);
     if(!parsed || parsed.__v !== DRIVE_BASE_SNAPSHOT_VERSION) return null; // formato viejo/desconocido: tratar como "sin base"
@@ -2635,7 +2743,7 @@ function driveGetBaseSnapshot(){
 }
 function driveSetBaseSnapshot(fullData){
   try{
-    localStorage.setItem('driveBaseSnapshot', JSON.stringify(buildLightweightSnapshot(fullData)));
+    localStorage.setItem(pk('driveBaseSnapshot'), JSON.stringify(buildLightweightSnapshot(fullData)));
   }catch(e){
     console.error('No se pudo guardar la foto base de sincronización (esto puede hacer que un próximo borrado no se respete):', e);
   }
@@ -2737,12 +2845,12 @@ function mergeAllData(base, local, remote, preferLocalOnConflict){
 
 function driveSaveTokenCache(){
   try{
-    localStorage.setItem('driveTokenCache', JSON.stringify({ token: driveAccessToken, expiresAt: driveTokenExpiresAt }));
+    localStorage.setItem(pk('driveTokenCache'), JSON.stringify({ token: driveAccessToken, expiresAt: driveTokenExpiresAt }));
   }catch(e){ /* no-op */ }
 }
 function driveLoadTokenCache(){
   try{
-    const raw = localStorage.getItem('driveTokenCache');
+    const raw = localStorage.getItem(pk('driveTokenCache'));
     if(!raw) return null;
     return JSON.parse(raw);
   }catch(e){ return null; }
@@ -2832,7 +2940,7 @@ async function driveApiFetch(url, options = {}){
   if(res.status === 401){
     driveAccessToken = null;
     driveTokenExpiresAt = 0;
-    localStorage.removeItem('driveTokenCache');
+    localStorage.removeItem(pk('driveTokenCache'));
     driveSetStatus('error', 'Google Drive: sesión expirada, reconecta');
     document.getElementById('btnConnectDrive').style.display = 'inline-block';
     document.getElementById('btnSyncDriveNow').style.display = 'none';
@@ -2880,7 +2988,7 @@ async function driveUploadFile(content){
   if(!res.ok) throw new Error('No se pudo crear el archivo en Drive');
   const data = await res.json();
   driveFileId = data.id;
-  localStorage.setItem('driveFileId', driveFileId);
+  localStorage.setItem(pk('driveFileId'), driveFileId);
   return data;
 }
 
@@ -2903,12 +3011,12 @@ async function driveMergeWithRemote(){
 
       if(JSON.stringify(remoteData) === JSON.stringify(collectAllData())){
         driveSetBaseSnapshot(collectAllData());
-        localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
+        localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
         driveSetStatus('connected', 'Google Drive: ya estaba al día');
         continue;
       }
 
-      const lastLocalChange = localStorage.getItem('lastLocalChangeIso');
+      const lastLocalChange = localStorage.getItem(pk('lastLocalChangeIso'));
       const remoteMeta = await driveFindFile();
       const remoteModified = remoteMeta ? remoteMeta.modifiedTime : null;
       const preferLocal = !remoteModified || (lastLocalChange && new Date(lastLocalChange) > new Date(remoteModified));
@@ -2924,7 +3032,7 @@ async function driveMergeWithRemote(){
       localStorage.setItem(DATA_KEY, JSON.stringify(collectDataForLocalStorage()));
       await driveUploadFile(finalData);
       driveSetBaseSnapshot(finalData);
-      localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
+      localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
       driveSetStatus('connected', 'Google Drive: cambios combinados de ambos dispositivos ✓');
     } while(driveMergeQueued);
   } finally {
@@ -2938,7 +3046,7 @@ async function driveSyncOnConnect(){
     let remoteMeta = driveFileId ? { id: driveFileId } : await driveFindFile();
     if(remoteMeta && !driveFileId){
       driveFileId = remoteMeta.id;
-      localStorage.setItem('driveFileId', driveFileId);
+      localStorage.setItem(pk('driveFileId'), driveFileId);
     }
 
     if(!remoteMeta){
@@ -2946,7 +3054,7 @@ async function driveSyncOnConnect(){
       const localData = collectAllData();
       await driveUploadFile(localData);
       driveSetBaseSnapshot(localData);
-      localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
+      localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
       driveSetStatus('connected', 'Google Drive: conectado (archivo creado)');
       return;
     }
@@ -2959,7 +3067,7 @@ async function driveSyncOnConnect(){
 }
 
 function scheduleDriveUpload(){
-  localStorage.setItem('lastLocalChangeIso', new Date().toISOString());
+  localStorage.setItem(pk('lastLocalChangeIso'), new Date().toISOString());
   if(!driveAccessToken || driveApplyingRemote) return;
   clearTimeout(driveSyncTimer);
   driveSetStatus('syncing', 'Google Drive: sincronizando...');
@@ -2971,7 +3079,7 @@ function scheduleDriveUpload(){
         const localData = collectAllData();
         await driveUploadFile(localData);
         driveSetBaseSnapshot(localData);
-        localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
+        localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
         driveSetStatus('connected', 'Google Drive: sincronizado');
       }
     }catch(err){
@@ -2994,7 +3102,7 @@ document.getElementById('btnSyncDriveNow').addEventListener('click', async () =>
       const localData = collectAllData();
       await driveUploadFile(localData);
       driveSetBaseSnapshot(localData);
-      localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
+      localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
       driveSetStatus('connected', 'Google Drive: sincronizado');
     }
   }catch(err){
@@ -3040,6 +3148,99 @@ const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
 if(isIos && !isStandalone){
   document.getElementById('iosInstallHint').style.display = 'block';
 }
+
+/* ========================= NOTIFICACIONES DE ESTRENOS ========================= */
+// Aviso importante y honesto sobre cómo funciona esto: no hay servidor propio, así que
+// no se pueden mandar "push" de verdad con el navegador cerrado. Lo que sí funciona es
+// mostrar un aviso del sistema cuando la app detecta, mientras está abierta (o recién
+// se abre), que un capítulo/película ya debería estar disponible. Funciona mejor si la
+// dejas instalada como app y la abres de vez en cuando (el service worker ayuda a que
+// el aviso se vea como una notificación nativa, con ícono y todo).
+let notifiedKeys = new Set();
+try{
+  notifiedKeys = new Set(JSON.parse(localStorage.getItem('notifiedReleaseKeys') || '[]'));
+}catch(e){ notifiedKeys = new Set(); }
+
+function saveNotifiedKeys(){
+  try{
+    const arr = [...notifiedKeys].slice(-300); // no dejar que crezca sin límite
+    localStorage.setItem('notifiedReleaseKeys', JSON.stringify(arr));
+  }catch(e){ /* no-op */ }
+}
+
+function notificationsSupported(){
+  return 'Notification' in window;
+}
+
+function updateNotifStatusUI(){
+  const el = document.getElementById('notifStatus');
+  const textEl = document.getElementById('notifStatusText');
+  const btn = document.getElementById('btnEnableNotifications');
+  if(!notificationsSupported()){
+    el.className = 'drive-status error';
+    textEl.textContent = 'Notificaciones: no soportadas en este navegador';
+    btn.style.display = 'none';
+    return;
+  }
+  const perm = Notification.permission;
+  if(perm === 'granted'){
+    el.className = 'drive-status connected';
+    textEl.textContent = 'Notificaciones: activadas';
+    btn.textContent = '🔔 Notificaciones activadas';
+  } else if(perm === 'denied'){
+    el.className = 'drive-status error';
+    textEl.textContent = 'Notificaciones: bloqueadas (cámbialo en ajustes del navegador/sitio)';
+    btn.textContent = '🔕 Bloqueadas';
+  } else {
+    el.className = 'drive-status';
+    textEl.textContent = 'Notificaciones: no configuradas';
+    btn.textContent = '🔔 Activar avisos de estrenos';
+  }
+}
+
+document.getElementById('btnEnableNotifications').addEventListener('click', async () => {
+  if(!notificationsSupported()) return;
+  if(Notification.permission === 'denied'){
+    await customAlert('Bloqueaste las notificaciones para este sitio. Para activarlas de nuevo, tienes que cambiarlo desde los ajustes de sitio de tu navegador (el ícono de candado/info junto a la URL).', { icon:'🔕', title:'Notificaciones bloqueadas' });
+    return;
+  }
+  try{
+    const result = await Notification.requestPermission();
+    updateNotifStatusUI();
+    if(result === 'granted'){
+      sendLocalNotification('¡Listo! 🔔', 'Te vamos a avisar por acá cuando salga un capítulo o película nueva de lo que sigues.', 'bitacora-test');
+    }
+  }catch(err){
+    console.warn('No se pudo pedir permiso de notificaciones:', err);
+  }
+});
+
+async function sendLocalNotification(title, body, tag){
+  if(!notificationsSupported() || Notification.permission !== 'granted') return;
+  const options = { body, tag, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png' };
+  try{
+    if('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(title, options);
+      return;
+    }
+  }catch(err){
+    console.warn('No se pudo mostrar la notificación vía service worker, uso el modo directo:', err);
+  }
+  try{ new Notification(title, options); }catch(err){ console.warn('No se pudo mostrar la notificación:', err); }
+}
+
+function notifyIfDue(key, dateIso, title, body){
+  if(Notification.permission !== 'granted') return;
+  if(!dateIso || dateIso > todayIsoDate()) return; // todavía no toca
+  if(notifiedKeys.has(key)) return;
+  notifiedKeys.add(key);
+  saveNotifiedKeys();
+  sendLocalNotification(title, body, key);
+}
+
+updateNotifStatusUI();
+
 
 
 /*AJUSTES: duración promedio*/
@@ -4009,14 +4210,21 @@ async function refreshUpcomingReleases(){
     const link = seriesApiLink[key];
     if(link.lastEpisodeCheck && (now - link.lastEpisodeCheck) < THROTTLE_MS){
       if(link.cachedNextEpisode) episodes.push({ name: getDisplayNameForSeriesKey(key), ...link.cachedNextEpisode });
-      continue;
+    } else {
+      try{
+        const info = await fetchNextEpisodeInfo(link);
+        link.lastEpisodeCheck = now;
+        link.cachedNextEpisode = info || null;
+        if(info) episodes.push({ name: getDisplayNameForSeriesKey(key), ...info });
+      }catch(err){ console.warn('No se pudo revisar el próximo episodio de', key, err); }
     }
-    try{
-      const info = await fetchNextEpisodeInfo(link);
-      link.lastEpisodeCheck = now;
-      link.cachedNextEpisode = info || null;
-      if(info) episodes.push({ name: getDisplayNameForSeriesKey(key), ...info });
-    }catch(err){ console.warn('No se pudo revisar el próximo episodio de', key, err); }
+    const cached = link.cachedNextEpisode;
+    if(cached){
+      const name = getDisplayNameForSeriesKey(key);
+      notifyIfDue(`series:${key}:${cached.dateIso}`, cached.dateIso,
+        `📺 Nuevo capítulo de ${name}`,
+        cached.label ? `Ya debería estar disponible el ${cached.label}.` : 'Ya debería estar disponible.');
+    }
   }
 
   const movies = [];
@@ -4025,14 +4233,20 @@ async function refreshUpcomingReleases(){
       const f = franchises[fKey];
       if(f.lastUpcomingCheck && (now - f.lastUpcomingCheck) < THROTTLE_MS){
         if(f.cachedUpcoming) movies.push({ franchiseName: f.name, title: f.cachedUpcoming.title, dateIso: f.cachedUpcoming.dateIso });
-        continue;
+      } else {
+        try{
+          const next = await fetchFranchiseUpcoming(fKey);
+          f.lastUpcomingCheck = now;
+          f.cachedUpcoming = next ? { title: next.title, dateIso: next.release_date } : null;
+          if(next) movies.push({ franchiseName: f.name, title: next.title, dateIso: next.release_date });
+        }catch(err){ console.warn('No se pudo revisar estrenos de la franquicia', fKey, err); }
       }
-      try{
-        const next = await fetchFranchiseUpcoming(fKey);
-        f.lastUpcomingCheck = now;
-        f.cachedUpcoming = next ? { title: next.title, dateIso: next.release_date } : null;
-        if(next) movies.push({ franchiseName: f.name, title: next.title, dateIso: next.release_date });
-      }catch(err){ console.warn('No se pudo revisar estrenos de la franquicia', fKey, err); }
+      const cachedM = f.cachedUpcoming;
+      if(cachedM){
+        notifyIfDue(`movie:${fKey}:${seriesKey(cachedM.title)}:${cachedM.dateIso}`, cachedM.dateIso,
+          `🎬 Estreno de ${f.name}`,
+          `"${cachedM.title}" ya debería estar disponible.`);
+      }
     }
   }
 
@@ -6974,6 +7188,222 @@ document.getElementById('randomModalClose').addEventListener('click', closeRando
 document.getElementById('randomModalOverlay').addEventListener('click', (e) => {
   if(e.target.id === 'randomModalOverlay') closeRandomModal();
 });
+
+/* ========================= INTERFAZ DE PERFILES ========================= */
+const PROFILE_EMOJIS = ['👤','🎬','📺','🎮','🐱','🐶','🦊','🐼','⭐','🔥','🌙','🎧','🍿','👾','🦄','🐸'];
+let selectedNewProfileEmoji = PROFILE_EMOJIS[Math.floor(Math.random() * PROFILE_EMOJIS.length)];
+let newProfilePhoto = null; // dataURL de la foto elegida para el perfil que se está creando
+let photoPickTarget = null; // 'new' (perfil nuevo) o el id de un perfil existente al que se le está cambiando la foto
+
+function avatarHtml(p){
+  return p.photo
+    ? `<div class="avatar-photo" style="background-image:url('${p.photo}')"></div>`
+    : `<span class="emoji">${p.emoji}</span>`;
+}
+
+function renderProfileButton(){
+  const list = loadProfiles();
+  const current = list.find(p => p.id === PROFILE_ID) || DEFAULT_PROFILE;
+  document.getElementById('btnOpenProfiles').innerHTML = `${avatarHtml(current)}<span>${escapeHtml(current.name)}</span>`;
+}
+
+function renderNewProfileEmojiPicker(){
+  const el = document.getElementById('newProfileEmojiPicker');
+  el.innerHTML = PROFILE_EMOJIS.map(e => `<button type="button" class="${e === selectedNewProfileEmoji ? 'selected' : ''}" onclick="pickNewProfileEmoji('${e}')">${e}</button>`).join('');
+}
+function pickNewProfileEmoji(emoji){
+  selectedNewProfileEmoji = emoji;
+  renderNewProfileEmojiPicker();
+}
+window.pickNewProfileEmoji = pickNewProfileEmoji;
+
+function renderNewProfilePhotoPreview(){
+  const el = document.getElementById('newProfilePhotoPreview');
+  const clearBtn = document.getElementById('btnClearNewProfilePhoto');
+  if(newProfilePhoto){
+    el.style.backgroundImage = `url('${newProfilePhoto}')`;
+    el.textContent = '';
+    clearBtn.style.display = 'inline-block';
+  } else {
+    el.style.backgroundImage = '';
+    el.textContent = selectedNewProfileEmoji;
+    clearBtn.style.display = 'none';
+  }
+}
+
+function renderProfileList(){
+  const list = loadProfiles();
+  const el = document.getElementById('profileList');
+  el.innerHTML = list.map(p => `
+    <div class="profile-row ${p.id === PROFILE_ID ? 'active' : ''}">
+      ${avatarHtml(p)}
+      <div class="info">
+        <div class="pname">${escapeHtml(p.name)}</div>
+        ${p.id === PROFILE_ID ? '<div class="ptag">ACTIVO AHORA</div>' : ''}
+      </div>
+      <div class="pactions">
+        ${p.id !== PROFILE_ID ? `<button type="button" class="btn-mini start" onclick="switchToProfile('${p.id}')" title="Cambiar a este perfil">Usar</button>` : ''}
+        <button type="button" class="btn-mini" onclick="pickPhotoForExistingProfile('${p.id}')" title="Cambiar foto">📷</button>
+        ${p.photo ? `<button type="button" class="btn-mini" onclick="clearExistingProfilePhoto('${p.id}')" title="Quitar foto (volver al emoji)">✕📷</button>` : ''}
+        <button type="button" class="btn-mini" onclick="renameProfilePrompt('${p.id}')" title="Renombrar">✎</button>
+        ${p.id !== 'default' && p.id !== PROFILE_ID ? `<button type="button" class="btn-mini" onclick="deleteProfilePrompt('${p.id}')" title="Borrar este perfil y todos sus datos">🗑️</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function pickPhotoForExistingProfile(id){
+  photoPickTarget = id;
+  document.getElementById('profilePhotoFileInput').click();
+}
+window.pickPhotoForExistingProfile = pickPhotoForExistingProfile;
+
+function clearExistingProfilePhoto(id){
+  const list = loadProfiles();
+  const p = list.find(pr => pr.id === id);
+  if(!p) return;
+  delete p.photo;
+  saveProfiles(list);
+  renderProfileList();
+  if(p.id === PROFILE_ID) renderProfileButton();
+}
+window.clearExistingProfilePhoto = clearExistingProfilePhoto;
+
+function openProfileModal(){
+  renderProfileList();
+  selectedNewProfileEmoji = PROFILE_EMOJIS[Math.floor(Math.random() * PROFILE_EMOJIS.length)];
+  newProfilePhoto = null;
+  photoPickTarget = null;
+  renderNewProfileEmojiPicker();
+  renderNewProfilePhotoPreview();
+  document.getElementById('newProfileName').value = '';
+  document.getElementById('profileModalOverlay').style.display = 'flex';
+}
+function closeProfileModal(){
+  document.getElementById('profileModalOverlay').style.display = 'none';
+}
+window.openProfileModal = openProfileModal;
+
+function switchToProfile(id){
+  if(id === PROFILE_ID) return;
+  localStorage.setItem(ACTIVE_PROFILE_KEY, id);
+  location.reload();
+}
+window.switchToProfile = switchToProfile;
+
+async function createProfileFromModal(){
+  const name = document.getElementById('newProfileName').value.trim();
+  if(!name){
+    await customAlert('Escribí un nombre para el nuevo perfil.', { icon:'👤', title:'Falta el nombre' });
+    return;
+  }
+  const list = loadProfiles();
+  const id = 'pf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const profile = { id, name, emoji: selectedNewProfileEmoji };
+  if(newProfilePhoto) profile.photo = newProfilePhoto;
+  list.push(profile);
+  saveProfiles(list);
+  switchToProfile(id);
+}
+
+async function renameProfilePrompt(id){
+  const list = loadProfiles();
+  const p = list.find(pr => pr.id === id);
+  if(!p) return;
+  const newName = await customPrompt('Nuevo nombre para este perfil:', p.name, { icon:'✎', title:'Renombrar perfil', okText:'Guardar' });
+  if(newName === null) return;
+  const trimmed = newName.trim();
+  if(!trimmed) return;
+  p.name = trimmed;
+  saveProfiles(list);
+  renderProfileList();
+  if(id === PROFILE_ID) renderProfileButton();
+}
+window.renameProfilePrompt = renameProfilePrompt;
+
+async function deleteProfilePrompt(id){
+  if(id === PROFILE_ID){
+    await customAlert('No podés borrar el perfil que estás usando ahora mismo. Cambiá a otro perfil primero.', { icon:'⚠️', title:'Perfil activo' });
+    return;
+  }
+  if(id === 'default'){
+    await customAlert('El perfil "Principal" no se puede borrar.', { icon:'⚠️', title:'No permitido' });
+    return;
+  }
+  const list = loadProfiles();
+  const p = list.find(pr => pr.id === id);
+  if(!p) return;
+  const ok = await customConfirm(`Esto borra TODOS los datos del perfil "${p.name}" (series, películas, logros, música, todo) de este dispositivo. No se puede deshacer. ¿Continuar?`, { icon:'🗑️', title:'Borrar perfil', okText:'Borrar todo', danger:true });
+  if(!ok) return;
+
+  // Borrar las claves de localStorage de ese perfil
+  const prefix = `p_${id}__`;
+  const keysToRemove = [];
+  for(let i = 0; i < localStorage.length; i++){
+    const k = localStorage.key(i);
+    if(k && k.startsWith(prefix)) keysToRemove.push(k);
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+
+  // Borrar su base de IndexedDB de audio
+  try{ indexedDB.deleteDatabase(prefix + 'bitacora-audio-db'); }
+  catch(err){ console.warn('No se pudo borrar la base de audio del perfil:', err); }
+
+  const newList = list.filter(pr => pr.id !== id);
+  saveProfiles(newList);
+  renderProfileList();
+}
+window.deleteProfilePrompt = deleteProfilePrompt;
+
+document.getElementById('btnOpenProfiles').addEventListener('click', openProfileModal);
+document.getElementById('profileModalClose').addEventListener('click', closeProfileModal);
+document.getElementById('profileModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'profileModalOverlay') closeProfileModal();
+});
+document.getElementById('btnCreateProfile').addEventListener('click', createProfileFromModal);
+document.getElementById('newProfileName').addEventListener('keydown', (e) => { if(e.key === 'Enter') createProfileFromModal(); });
+
+document.getElementById('btnPickNewProfilePhoto').addEventListener('click', () => {
+  photoPickTarget = 'new';
+  document.getElementById('profilePhotoFileInput').click();
+});
+document.getElementById('btnClearNewProfilePhoto').addEventListener('click', () => {
+  newProfilePhoto = null;
+  renderNewProfilePhotoPreview();
+});
+
+const MAX_PROFILE_PHOTO_BYTES = 8 * 1024 * 1024; // ~8MB del archivo original; después se comprime bastante
+document.getElementById('profilePhotoFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file || !photoPickTarget) return;
+  if(file.size > MAX_PROFILE_PHOTO_BYTES){
+    await customAlert('Esa foto es muy pesada. Elegí una más liviana.', { icon:'📷', title:'Archivo muy pesado' });
+    photoPickTarget = null;
+    return;
+  }
+  try{
+    const dataUrl = await resizeImageToDataUrl(file, 240, 0.85);
+    if(photoPickTarget === 'new'){
+      newProfilePhoto = dataUrl;
+      renderNewProfilePhotoPreview();
+    } else {
+      const list = loadProfiles();
+      const p = list.find(pr => pr.id === photoPickTarget);
+      if(p){
+        p.photo = dataUrl;
+        saveProfiles(list);
+        renderProfileList();
+        if(p.id === PROFILE_ID) renderProfileButton();
+      }
+    }
+  }catch(err){
+    console.error('No se pudo procesar la foto de perfil:', err);
+    await customAlert('No se pudo procesar esa imagen. Probá con otra.', { icon:'📷', title:'Error' });
+  }
+  photoPickTarget = null;
+});
+
+renderProfileButton();
 
 /*INIT*/
 nowDefaults('f');
