@@ -1900,6 +1900,92 @@ body{
 const DATA_KEY = 'bitacora-series-data';
 const OLD_KEY = 'bitacora-series-entries';
 
+/* ========================= AUDIO EN INDEXEDDB (no en localStorage) =========================
+   La música de carpeta vive en IndexedDB porque localStorage tiene un límite de solo 5-10MB
+   en la mayoría de los navegadores, y un par de canciones ya lo llenaban por completo.
+   IndexedDB soporta cientos de MB sin problema. En memoria, folderMusic/movieFolderMusic
+   siguen siendo objetos normales igual que antes; solo cambia DÓNDE se guardan en disco. */
+const AUDIO_DB_NAME = 'bitacora-audio-db';
+const AUDIO_STORE = 'audio';
+let audioDbPromise = null;
+
+function openAudioDb(){
+  if(audioDbPromise) return audioDbPromise;
+  audioDbPromise = new Promise((resolve, reject) => {
+    if(!window.indexedDB){ reject(new Error('IndexedDB no disponible en este navegador')); return; }
+    const req = indexedDB.open(AUDIO_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains(AUDIO_STORE)) db.createObjectStore(AUDIO_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return audioDbPromise;
+}
+async function audioDbSet(key, value){
+  const db = await openAudioDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, 'readwrite');
+    tx.objectStore(AUDIO_STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function audioDbDelete(key){
+  const db = await openAudioDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, 'readwrite');
+    tx.objectStore(AUDIO_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function audioDbGetAll(){
+  const db = await openAudioDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, 'readonly');
+    const store = tx.objectStore(AUDIO_STORE);
+    const keysReq = store.getAllKeys();
+    const valuesReq = store.getAll();
+    tx.oncomplete = () => {
+      const result = {};
+      keysReq.result.forEach((k, i) => { result[k] = valuesReq.result[i]; });
+      resolve(result);
+    };
+    tx.onerror = () => reject(tx.error);
+  });
+}
+// Vuelca TODO lo que hay ahora mismo en folderMusic/movieFolderMusic (en memoria) a IndexedDB,
+// reemplazando lo que hubiera. Se usa al migrar datos viejos y al restaurar un backup/Drive.
+async function audioDbReplaceAllFromMemory(){
+  const db = await openAudioDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, 'readwrite');
+    const store = tx.objectStore(AUDIO_STORE);
+    store.clear();
+    Object.keys(folderMusic).forEach(k => store.put(folderMusic[k], 'series:' + k));
+    Object.keys(movieFolderMusic).forEach(k => store.put(movieFolderMusic[k], 'movie:' + k));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+// Reconstruye folderMusic/movieFolderMusic en memoria a partir de lo que hay guardado en IndexedDB.
+async function loadAudioFromIndexedDb(){
+  try{
+    const all = await audioDbGetAll();
+    const fm = {}, mfm = {};
+    Object.keys(all).forEach(fullKey => {
+      if(fullKey.startsWith('series:')) fm[fullKey.slice(7)] = all[fullKey];
+      else if(fullKey.startsWith('movie:')) mfm[fullKey.slice(6)] = all[fullKey];
+    });
+    folderMusic = fm;
+    movieFolderMusic = mfm;
+  }catch(err){
+    console.error('No se pudo leer la música guardada desde IndexedDB (¿navegador sin soporte o en modo privado?):', err);
+  }
+}
+
 let entries = [];        // episodios de series
 let status = {};         // { serieKeyLower: 'curso'|'terminada'|'rewatch'|'abandonada' }
 let statusManualAt = {}; // { serieKeyLower: timestamp del último cambio manual de estado }
@@ -2211,6 +2297,7 @@ function migrateMovieFranchises(){
 }
 
 async function loadAll(){
+  let hadInlineAudioToMigrate = false;
   try{
     const savedData = localStorage.getItem(DATA_KEY);
     if(savedData){
@@ -2226,6 +2313,8 @@ async function loadAll(){
       genres = parsed.genres || {};
       types = parsed.types || {};
       sagas = parsed.sagas || {};
+      // Compatibilidad con backups/localStorage viejos que todavía traían la música adentro:
+      // si aparece acá, la migramos a IndexedDB más abajo y dejamos de guardarla en localStorage.
       folderMusic = parsed.folderMusic || {};
       seriesGoals = parsed.seriesGoals || {};
       seriesDuration = parsed.seriesDuration || {};
@@ -2240,6 +2329,7 @@ async function loadAll(){
       movieFolderMusic = parsed.movieFolderMusic || {};
       movieDuration = parsed.movieDuration || {};
       settings = normalizeSettings(parsed.settings);
+      if(Object.keys(folderMusic).length || Object.keys(movieFolderMusic).length) hadInlineAudioToMigrate = true;
     } else {
       const old = localStorage.getItem(OLD_KEY);
       entries = old ? JSON.parse(old) : [];
@@ -2248,6 +2338,16 @@ async function loadAll(){
   } catch(e){
     console.error('Error al cargar datos:', e);
   }
+
+  // Migración de música: si venía adentro del JSON de localStorage (formato viejo), la volcamos
+  // a IndexedDB una sola vez. Después, IndexedDB manda siempre como fuente de verdad para el audio.
+  try{
+    if(hadInlineAudioToMigrate) await audioDbReplaceAllFromMemory();
+    await loadAudioFromIndexedDb();
+  }catch(err){
+    console.error('No se pudo migrar/cargar la música de carpeta:', err);
+  }
+
   // Red de seguridad: nunca dejar pasar un episodio/película cuyo ID ya esté marcado como borrado.
   if(Object.keys(deletedIds).length){
     entries = entries.filter(e => !deletedIds[e.id]);
@@ -2270,21 +2370,19 @@ async function loadAll(){
   renderTrash();
   renderCustomAchievements();
   updateGlobalStats();
-  if(abandonedChanged || trashPurged) await saveAll();
+  if(abandonedChanged || trashPurged || hadInlineAudioToMigrate) await saveAll();
   checkBackupReminder();
   autoRefreshLinkedSeriesGoals(); // en segundo plano, no bloquea el arranque
 }
 
 async function saveAll(){
   try{
-    const dataToSave = JSON.stringify({
-      entries, status, statusManualAt, trash, deletedIds, customAchievements, covers, pending, genres, types, sagas, folderMusic, seriesGoals, seriesDuration, seriesApiLink,
-      movieEntries, movieCovers, moviePending, movieGenres, movieTypes, movieSagas, franchises, movieFolderMusic, movieDuration, settings
-    });
-    localStorage.setItem(DATA_KEY, dataToSave);
+    // OJO: folderMusic/movieFolderMusic NO van acá — viven en IndexedDB (ver audioDb* más arriba)
+    // para no volver a llenar los 5-10MB de localStorage con archivos de audio.
+    localStorage.setItem(DATA_KEY, JSON.stringify(collectDataForLocalStorage()));
   } catch(e){
-    console.error('No se pudo guardar la bitácora en localStorage. Puede que la música de carpeta ocupe demasiado espacio.', e);
-    await customAlert('No se pudo guardar. Es posible que el almacenamiento local esté lleno (por ejemplo, por archivos de música muy pesados). Intenta usar un clip de audio más corto o liviano.', { icon:'💾', title:'Espacio insuficiente' });
+    console.error('No se pudo guardar la bitácora en localStorage.', e);
+    await customAlert('No se pudo guardar. Es posible que el almacenamiento local esté lleno. Probá exportar un backup y revisar si hay datos muy pesados (portadas muy grandes, por ejemplo).', { icon:'💾', title:'Espacio insuficiente' });
   }
   updateGlobalStats();
   scheduleDriveUpload();
@@ -2300,7 +2398,15 @@ function collectAllData(){
   };
 }
 
-function applyAllData(parsed){
+// Igual que collectAllData(), pero sin folderMusic/movieFolderMusic — es lo único que debe
+// escribirse en localStorage (la música vive en IndexedDB). Los backups y Drive sí usan
+// collectAllData() completo, porque no tienen el límite de tamaño de localStorage.
+function collectDataForLocalStorage(){
+  const { folderMusic: _fm, movieFolderMusic: _mfm, ...rest } = collectAllData();
+  return rest;
+}
+
+async function applyAllData(parsed){
   if(typeof parsed !== 'object' || parsed === null){
     throw new Error('Formato inválido');
   }
@@ -2329,6 +2435,10 @@ function applyAllData(parsed){
   movieFolderMusic = parsed.movieFolderMusic || {};
   movieDuration = parsed.movieDuration || {};
   settings = normalizeSettings(parsed.settings);
+
+  // La música restaurada (de un backup o de Drive) se guarda en IndexedDB, no en localStorage.
+  try{ await audioDbReplaceAllFromMemory(); }
+  catch(err){ console.error('No se pudo guardar en IndexedDB la música restaurada:', err); }
 
   // Red de seguridad: nunca dejar pasar un episodio/película cuyo ID ya esté marcado
   // como borrado, sin importar de dónde vengan estos datos (backup, Drive, etc).
@@ -2374,7 +2484,7 @@ function exportBackup(){
 async function restoreBackup(file){
   const text = await file.text();
   const parsed = JSON.parse(text);
-  applyAllData(parsed);
+  await applyAllData(parsed);
   localStorage.removeItem('driveBaseSnapshot'); // el backup restaurado es una versión nueva; no comparar contra la sincronización vieja
   await saveAll();
 }
@@ -2778,11 +2888,11 @@ async function driveMergeWithRemote(){
       const merged = mergeAllData(base, freshLocalData, remoteData, preferLocal);
 
       driveApplyingRemote = true;
-      applyAllData(merged);
+      await applyAllData(merged);
       driveApplyingRemote = false;
 
       const finalData = collectAllData();
-      localStorage.setItem(DATA_KEY, JSON.stringify(finalData));
+      localStorage.setItem(DATA_KEY, JSON.stringify(collectDataForLocalStorage()));
       await driveUploadFile(finalData);
       driveSetBaseSnapshot(finalData);
       localStorage.setItem('driveLastSyncedIso', new Date().toISOString());
@@ -3438,7 +3548,7 @@ document.getElementById('btnBulkCover').addEventListener('click', () => {
 });
 
 /*MÚSICA DE CARPETA (compartido)*/
-const MAX_AUDIO_BYTES = 6 * 1024 * 1024; // ~6MB, para no reventar localStorage
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // ~20MB — ahora vive en IndexedDB, no en localStorage, así que hay mucho más margen
 
 function readFileAsDataUrl(file){
   return new Promise((resolve, reject) => {
@@ -3482,11 +3592,13 @@ async function removeFolderMusic(name){
   const removed = folderMusic[key];
   if(!removed) return;
   delete folderMusic[key];
+  await audioDbDelete('series:' + key);
   stopFolderMusic('series:' + key);
   render();
   await saveAll();
   showUndoToast('Música de la carpeta eliminada.', async () => {
     folderMusic[key] = removed;
+    await audioDbSet('series:' + key, removed);
     render();
     await saveAll();
   });
@@ -3499,16 +3611,22 @@ document.getElementById('audioFileInput').addEventListener('change', async (e) =
   e.target.value = '';
   if(!file || !pendingMusicSeries) return;
   if(file.size > MAX_AUDIO_BYTES){
-    await customAlert('Ese archivo de audio es muy pesado (más de 6MB). Elige un clip más corto o liviano para que se pueda guardar.', { icon:'🎵', title:'Archivo muy pesado' });
+    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elige un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
     pendingMusicSeries = null;
     return;
   }
   try{
     const dataUrl = await readFileAsDataUrl(file);
-    folderMusic[seriesKey(pendingMusicSeries)] = { name: file.name, dataUrl };
+    const key = seriesKey(pendingMusicSeries);
+    const value = { name: file.name, dataUrl };
+    folderMusic[key] = value;
+    await audioDbSet('series:' + key, value);
     await saveAll();
     render();
-  }catch(err){ console.error('No se pudo procesar el audio', err); }
+  }catch(err){
+    console.error('No se pudo procesar/guardar el audio', err);
+    await customAlert('No se pudo guardar este audio. Probá con un archivo más liviano.', { icon:'🎵', title:'Error al guardar' });
+  }
   pendingMusicSeries = null;
 });
 
@@ -4516,11 +4634,13 @@ async function removeMovieFolderMusic(name){
   const removed = movieFolderMusic[key];
   if(!removed) return;
   delete movieFolderMusic[key];
+  await audioDbDelete('movie:' + key);
   stopFolderMusic('movie:' + key);
   renderMovies();
   await saveAll();
   showUndoToast('Música de la carpeta eliminada.', async () => {
     movieFolderMusic[key] = removed;
+    await audioDbSet('movie:' + key, removed);
     renderMovies();
     await saveAll();
   });
@@ -4533,16 +4653,22 @@ document.getElementById('movieAudioFileInput').addEventListener('change', async 
   e.target.value = '';
   if(!file || !pendingMusicMovie) return;
   if(file.size > MAX_AUDIO_BYTES){
-    await customAlert('Ese archivo de audio es muy pesado (más de 6MB). Elige un clip más corto o liviano para que se pueda guardar.', { icon:'🎵', title:'Archivo muy pesado' });
+    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elige un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
     pendingMusicMovie = null;
     return;
   }
   try{
     const dataUrl = await readFileAsDataUrl(file);
-    movieFolderMusic[seriesKey(pendingMusicMovie)] = { name: file.name, dataUrl };
+    const key = seriesKey(pendingMusicMovie);
+    const value = { name: file.name, dataUrl };
+    movieFolderMusic[key] = value;
+    await audioDbSet('movie:' + key, value);
     await saveAll();
     renderMovies();
-  }catch(err){ console.error('No se pudo procesar el audio', err); }
+  }catch(err){
+    console.error('No se pudo procesar/guardar el audio', err);
+    await customAlert('No se pudo guardar este audio. Probá con un archivo más liviano.', { icon:'🎵', title:'Error al guardar' });
+  }
   pendingMusicMovie = null;
 });
 
