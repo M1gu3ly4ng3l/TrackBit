@@ -159,6 +159,31 @@ body{
 }
 .wrapped-trigger:hover{ filter:brightness(1.08); }
 
+.tools-toggle{
+  margin-top:10px; width:100%;
+  background:none; border:1px dashed var(--line); color:var(--text-dim);
+  font-family:'JetBrains Mono', monospace; font-size:11.5px; letter-spacing:0.3px;
+  padding:9px; border-radius:8px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; gap:6px;
+}
+.tools-toggle:hover{ border-color:var(--tape); color:var(--tape); }
+.tools-toggle.open{ border-style:solid; }
+.tools-panel{ margin-top:6px; }
+
+.backup-row{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.backup-btn{ min-width:0; }
+
+.drive-status{ min-width:0; }
+.drive-status span:last-child{ overflow-wrap:anywhere; }
+
+@media (max-width:480px){
+  .backup-row{ flex-direction:column; }
+  .backup-btn{ flex:1 1 auto; width:100%; }
+  .drive-row{ flex-direction:column; align-items:stretch; }
+  .drive-status{ flex:1 1 auto; }
+  .drive-btn{ width:100%; text-align:center; }
+}
+
 .backup-row{ display:flex; gap:8px; margin-top:10px; }
 .backup-btn{
   flex:1;
@@ -1215,31 +1240,34 @@ body{
       <div>ÚLTIMA SESIÓN: <b id="statLast">—</b></div>
     </div>
     <button class="wrapped-trigger" id="btnOpenWrapped">✨ Ver mi Wrapped</button>
-    <div class="backup-row">
-      <button class="backup-btn" id="btnExportBackup">💾 Exportar backup</button>
-      <button class="backup-btn" id="btnRestoreBackup">📂 Restaurar backup</button>
-    </div>
-    <div class="backup-row">
-      <button class="backup-btn" id="btnOpenDurationSettings">⏱️ Duración promedio por tipo</button>
-      <button class="backup-btn" id="btnOpenTrash">🗑️ Papelera <span id="trashCountBadge"></span></button>
-    </div>
-    <div class="backup-row">
-      <button class="backup-btn" id="btnOpenApiSettings">🔎 Autocompletar (TMDB)</button>
-    </div>
-    <div class="drive-row">
-      <div class="drive-status" id="driveStatus"><span class="dot"></span><span id="driveStatusText">Google Drive: no conectado</span></div>
-      <button class="drive-btn" id="btnConnectDrive">🔗 Conectar Google Drive</button>
-      <button class="drive-btn" id="btnSyncDriveNow" style="display:none;">🔄 Sincronizar ahora</button>
-    </div>
-    <div class="drive-row" id="pwaInstallRow" style="display:none;">
-      <button class="drive-btn" id="btnInstallPwa">📲 Instalar app en el celular</button>
-    </div>
-    <div class="ios-install-hint" id="iosInstallHint" style="display:none;">
-      📱 En iPhone/iPad: toca <b>Compartir</b> (el ícono del cuadrito con la flecha) y luego <b>"Agregar a pantalla de inicio"</b>.
-    </div>
-    <div class="drive-row">
-      <div class="drive-status" id="notifStatus"><span class="dot"></span><span id="notifStatusText">Notificaciones: no configuradas</span></div>
-      <button class="drive-btn" id="btnEnableNotifications">🔔 Activar avisos de estrenos</button>
+    <button type="button" class="tools-toggle" id="btnToggleTools">⚙️ Herramientas y ajustes <span id="toolsToggleArrow">▾</span></button>
+    <div class="tools-panel" id="toolsPanel" style="display:none;">
+      <div class="backup-row">
+        <button class="backup-btn" id="btnExportBackup">💾 Exportar backup</button>
+        <button class="backup-btn" id="btnRestoreBackup">📂 Restaurar backup</button>
+      </div>
+      <div class="backup-row">
+        <button class="backup-btn" id="btnOpenDurationSettings">⏱️ Duración promedio por tipo</button>
+        <button class="backup-btn" id="btnOpenTrash">🗑️ Papelera <span id="trashCountBadge"></span></button>
+      </div>
+      <div class="backup-row">
+        <button class="backup-btn" id="btnOpenApiSettings">🔎 Autocompletar (TMDB)</button>
+      </div>
+      <div class="drive-row">
+        <div class="drive-status" id="driveStatus"><span class="dot"></span><span id="driveStatusText">Google Drive: no conectado</span></div>
+        <button class="drive-btn" id="btnConnectDrive">🔗 Conectar Google Drive</button>
+        <button class="drive-btn" id="btnSyncDriveNow" style="display:none;">🔄 Sincronizar ahora</button>
+      </div>
+      <div class="drive-row" id="pwaInstallRow" style="display:none;">
+        <button class="drive-btn" id="btnInstallPwa">📲 Instalar app en el celular</button>
+      </div>
+      <div class="ios-install-hint" id="iosInstallHint" style="display:none;">
+        📱 En iPhone/iPad: toca <b>Compartir</b> (el ícono del cuadrito con la flecha) y luego <b>"Agregar a pantalla de inicio"</b>.
+      </div>
+      <div class="drive-row">
+        <div class="drive-status" id="notifStatus"><span class="dot"></span><span id="notifStatusText">Notificaciones: no configuradas</span></div>
+        <button class="drive-btn" id="btnEnableNotifications">🔔 Activar avisos de estrenos</button>
+      </div>
     </div>
   </div>
 
@@ -7056,6 +7084,15 @@ function prevWrappedSlide(){
   if(wrappedIndex > 0){ wrappedIndex--; renderWrappedSlide(); }
 }
 
+document.getElementById('btnToggleTools').addEventListener('click', () => {
+  const panel = document.getElementById('toolsPanel');
+  const btn = document.getElementById('btnToggleTools');
+  const arrow = document.getElementById('toolsToggleArrow');
+  const isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : 'block';
+  btn.classList.toggle('open', !isOpen);
+  arrow.textContent = isOpen ? '▾' : '▴';
+});
 document.getElementById('btnOpenWrapped').addEventListener('click', openWrappedYearPicker);
 document.getElementById('wrappedYearClose').addEventListener('click', closeWrappedYearPicker);
 document.getElementById('wrappedYearOverlay').addEventListener('click', (e) => {
