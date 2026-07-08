@@ -2727,7 +2727,7 @@ function driveSetStatus(mode, text){
 }
 
 /*FUSIÓN DE 3 VÍAS (evita perder registros al sincronizar)*/
-const DRIVE_BASE_SNAPSHOT_VERSION = 2;
+const DRIVE_BASE_SNAPSHOT_VERSION = 3; // subido tras agregar seriesApiLink a los campos sincronizados
 
 function cheapHash(str){
   // Hash no criptográfico (FNV-1a 32 bits) — solo para detectar cambios, no para seguridad
@@ -2839,7 +2839,7 @@ function mergeDicts(baseHashes, localDict, remoteDict){
 
 const DRIVE_ID_ARRAY_FIELDS = ['entries', 'movieEntries', 'pending', 'moviePending', 'trash', 'customAchievements'];
 const DRIVE_DICT_FIELDS = [
-  'status', 'statusManualAt', 'covers', 'genres', 'types', 'sagas', 'folderMusic', 'seriesGoals', 'seriesDuration',
+  'status', 'statusManualAt', 'covers', 'genres', 'types', 'sagas', 'folderMusic', 'seriesGoals', 'seriesDuration', 'seriesApiLink',
   'movieCovers', 'movieGenres', 'movieTypes', 'movieSagas', 'franchises', 'movieFolderMusic', 'movieDuration', 'settings'
 ];
 
