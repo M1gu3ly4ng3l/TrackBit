@@ -1276,6 +1276,11 @@ body{
     <div class="upcoming-list" id="upcomingList"></div>
   </div>
 
+  <div class="panel upcoming-releases" id="timeCapsulePanel" style="display:none;">
+    <div class="panel-label">🕰️ Cápsula del tiempo</div>
+    <div class="upcoming-list" id="timeCapsuleList"></div>
+  </div>
+
   <div class="tab-bar">
     <button class="tab-btn active" id="tabBtnSeries" onclick="switchMainTab('series')"><span class="tab-icon">📺</span><span class="tab-label">Series</span></button>
     <button class="tab-btn movies-tab" id="tabBtnMovies" onclick="switchMainTab('peliculas')"><span class="tab-icon">🎬</span><span class="tab-label">Películas</span></button>
@@ -2986,28 +2991,38 @@ async function driveDownloadFile(fileId){
 
 async function driveUploadFile(content){
   const jsonStr = JSON.stringify(content);
+  const bodyBlob = new Blob([jsonStr], { type: 'application/json' });
+
   if(driveFileId){
-    const res = await driveApiFetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: jsonStr
-    });
-    if(!res.ok) throw new Error('No se pudo actualizar el archivo en Drive');
-    return await res.json();
+    // Actualizar archivo existente vía subida "resumable" — a diferencia de la subida
+    // simple (que Google limita a 5MB), esta no tiene ese techo. Importante porque a
+    // medida que se acumulan portadas/covers, el archivo de backup puede superar los 5MB
+    // fácilmente, y una subida simple que falla por peso quedaba fallando en silencio
+    // (sin romper nada visible), haciendo que la próxima fusión comparara contra una
+    // versión de Drive desactualizada y borrara cosas agregadas recientemente.
+    const initRes = await driveApiFetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=resumable`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' }, body: JSON.stringify({ name: DRIVE_FILE_NAME }) }
+    );
+    if(!initRes.ok) throw new Error('No se pudo iniciar la subida a Drive (' + initRes.status + ')');
+    const uploadUrl = initRes.headers.get('Location');
+    if(!uploadUrl) throw new Error('Drive no devolvió una URL de subida (sesión resumable)');
+    const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: bodyBlob });
+    if(!putRes.ok) throw new Error('No se pudo completar la subida a Drive (' + putRes.status + ')');
+    return await putRes.json();
   }
-  const boundary = 'bitacora_boundary_' + Date.now();
+
   const metadata = { name: DRIVE_FILE_NAME, mimeType: 'application/json' };
-  const body =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonStr}\r\n` +
-    `--${boundary}--`;
-  const res = await driveApiFetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`, {
-    method: 'POST',
-    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-    body
-  });
-  if(!res.ok) throw new Error('No se pudo crear el archivo en Drive');
-  const data = await res.json();
+  const initRes = await driveApiFetch(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' }, body: JSON.stringify(metadata) }
+  );
+  if(!initRes.ok) throw new Error('No se pudo iniciar la creación del archivo en Drive (' + initRes.status + ')');
+  const uploadUrl = initRes.headers.get('Location');
+  if(!uploadUrl) throw new Error('Drive no devolvió una URL de subida (sesión resumable)');
+  const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: bodyBlob });
+  if(!putRes.ok) throw new Error('No se pudo completar la creación del archivo en Drive (' + putRes.status + ')');
+  const data = await putRes.json();
   driveFileId = data.id;
   localStorage.setItem(pk('driveFileId'), driveFileId);
   return data;
@@ -4607,8 +4622,62 @@ document.getElementById('globalSearchModalOverlay').addEventListener('click', (e
 });
 document.getElementById('globalSearchInput').addEventListener('input', runGlobalSearch);
 
+function renderTimeCapsulePanel(){
+  const panel = document.getElementById('timeCapsulePanel');
+  const list = document.getElementById('timeCapsuleList');
+
+  const today = new Date();
+  const todayMonth = pad(today.getMonth() + 1);
+  const todayDay = pad(today.getDate());
+  const currentYear = today.getFullYear();
+
+  const items = [];
+
+  entries.forEach(e => {
+    if(!e.date) return;
+    const [y, m, d] = e.date.split('-');
+    if(m !== todayMonth || d !== todayDay) return;
+    const yearsAgo = currentYear - parseInt(y, 10);
+    if(yearsAgo <= 0) return;
+    const tParts = [];
+    if(e.season !== '' && e.season != null) tParts.push(`T${pad(e.season)}`);
+    if(e.episode !== '' && e.episode != null) tParts.push(`E${pad(e.episode)}`);
+    const tag = tParts.length ? ` (${tParts.join(' ')})` : '';
+    items.push({
+      icon: '📺',
+      html: `Viste${tag} de <b>${escapeHtml(e.serie)}</b>`,
+      yearsAgo
+    });
+  });
+
+  movieEntries.forEach(e => {
+    if(!e.date) return;
+    const [y, m, d] = e.date.split('-');
+    if(m !== todayMonth || d !== todayDay) return;
+    const yearsAgo = currentYear - parseInt(y, 10);
+    if(yearsAgo <= 0) return;
+    items.push({
+      icon: '🎬',
+      html: `Viste <b>${escapeHtml(e.title)}</b>`,
+      yearsAgo
+    });
+  });
+
+  if(!items.length){ panel.style.display = 'none'; return; }
+
+  items.sort((a, b) => a.yearsAgo - b.yearsAgo);
+  panel.style.display = 'block';
+  list.innerHTML = items.slice(0, 20).map(it => `
+    <div class="upcoming-row">
+      <span class="upcoming-icon">${it.icon}</span>
+      <span class="upcoming-text">${it.html}</span>
+      <span class="upcoming-date">hace ${it.yearsAgo} ${it.yearsAgo === 1 ? 'año' : 'años'}</span>
+    </div>`).join('');
+}
+
 function render(){
   renderContinueWatching();
+  renderTimeCapsulePanel();
   updateSerieList();
   const container = document.getElementById('logContainer');
   const search = document.getElementById('fSearch').value.trim().toLowerCase();
@@ -5301,6 +5370,7 @@ function groupMovieEntries(list){
 
 function renderMovies(){
   updateMovieList();
+  renderTimeCapsulePanel();
   const container = document.getElementById('movieLogContainer');
   const search = document.getElementById('mSearch').value.trim().toLowerCase();
 
