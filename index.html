@@ -2512,8 +2512,6 @@ async function loadAll(){
 
   // Red de seguridad: nunca dejar pasar un episodio/película cuyo ID ya esté marcado como borrado.
   if(Object.keys(deletedIds).length){
-    entries.filter(e => deletedIds[e.id]).forEach(e => console.warn('[deletedIds-filter] entries: se descarta id=' + e.id, e));
-    movieEntries.filter(e => deletedIds[e.id]).forEach(e => console.warn('[deletedIds-filter] movieEntries: se descarta id=' + e.id, e));
     entries = entries.filter(e => !deletedIds[e.id]);
     movieEntries = movieEntries.filter(e => !deletedIds[e.id]);
   }
@@ -2571,42 +2569,6 @@ function collectDataForLocalStorage(){
   return rest;
 }
 
-// Solo el NOMBRE de cada canción, sin el audio en sí (que puede pesar varios MB cada una).
-// Esto es lo que viaja en la sincronización AUTOMÁTICA con Drive: así cada sync es liviano
-// y rápido, en vez de subir megas y megas de audio cada vez que cambia cualquier cosa chica
-// (lo cual además superaba el límite de subida de Drive y hacía que cosas recién agregadas
-// parecieran "borrarse" al sincronizar). El backup manual (botón "Exportar backup") sigue
-// llevando el audio completo, para que sea una copia de verdad restaurable en otro lado.
-function stripMusicAudio(musicDict){
-  const out = {};
-  Object.keys(musicDict || {}).forEach(k => {
-    const v = musicDict[k];
-    out[k] = v ? { name: v.name } : v;
-  });
-  return out;
-}
-function collectDataForDriveSync(){
-  const full = collectAllData();
-  return {
-    ...full,
-    folderMusic: stripMusicAudio(full.folderMusic),
-    movieFolderMusic: stripMusicAudio(full.movieFolderMusic)
-  };
-}
-// Al aplicar datos livianos (sin audio) que vienen de Drive, NO pisamos el audio real que
-// ya tenemos guardado en este dispositivo — solo actualizamos qué carpetas tienen música
-// según los demás dispositivos, conservando nuestro propio audio donde ya lo tengamos.
-function hydrateMusicDict(incoming, existing){
-  const result = {};
-  Object.keys(incoming || {}).forEach(k => {
-    const inc = incoming[k];
-    if(inc && inc.dataUrl){ result[k] = inc; return; }               // vino completo (backup manual restaurado)
-    if(existing[k] && existing[k].dataUrl){ result[k] = existing[k]; return; } // ya lo teníamos completo acá
-    result[k] = inc; // solo referencia liviana (nombre); el audio no está disponible todavía en este dispositivo
-  });
-  return result;
-}
-
 async function applyAllData(parsed){
   if(typeof parsed !== 'object' || parsed === null){
     throw new Error('Formato inválido');
@@ -2622,9 +2584,7 @@ async function applyAllData(parsed){
   genres = parsed.genres || {};
   types = parsed.types || {};
   sagas = parsed.sagas || {};
-  // No pisamos el audio real que ya tenemos guardado acá con una versión liviana (solo
-  // nombre) que pudo haber llegado de una sincronización con Drive.
-  folderMusic = hydrateMusicDict(parsed.folderMusic, folderMusic);
+  folderMusic = parsed.folderMusic || {};
   seriesGoals = parsed.seriesGoals || {};
   seriesDuration = parsed.seriesDuration || {};
   seriesApiLink = parsed.seriesApiLink || {};
@@ -2635,7 +2595,7 @@ async function applyAllData(parsed){
   movieTypes = parsed.movieTypes || {};
   movieSagas = parsed.movieSagas || {};
   franchises = parsed.franchises || {};
-  movieFolderMusic = hydrateMusicDict(parsed.movieFolderMusic, movieFolderMusic);
+  movieFolderMusic = parsed.movieFolderMusic || {};
   movieDuration = parsed.movieDuration || {};
   settings = normalizeSettings(parsed.settings);
 
@@ -2646,8 +2606,6 @@ async function applyAllData(parsed){
   // Red de seguridad: nunca dejar pasar un episodio/película cuyo ID ya esté marcado
   // como borrado, sin importar de dónde vengan estos datos (backup, Drive, etc).
   if(Object.keys(deletedIds).length){
-    entries.filter(e => deletedIds[e.id]).forEach(e => console.warn('[deletedIds-filter] entries: se descarta id=' + e.id, e));
-    movieEntries.filter(e => deletedIds[e.id]).forEach(e => console.warn('[deletedIds-filter] movieEntries: se descarta id=' + e.id, e));
     entries = entries.filter(e => !deletedIds[e.id]);
     movieEntries = movieEntries.filter(e => !deletedIds[e.id]);
   }
@@ -2817,7 +2775,7 @@ function driveSetBaseSnapshot(fullData){
   }
 }
 
-function mergeArraysById(baseIds, localArr, remoteArr, fieldName){
+function mergeArraysById(baseIds, localArr, remoteArr){
   const baseIdSet = new Set(baseIds || []);
   localArr = localArr || []; remoteArr = remoteArr || [];
   const localMap = new Map(localArr.map(i => [i.id, i]));
@@ -2833,26 +2791,14 @@ function mergeArraysById(baseIds, localArr, remoteArr, fieldName){
     if(inLocal && inRemote){
       const localItem = localMap.get(id);
       const remoteItem = remoteMap.get(id);
-      const same = JSON.stringify(localItem) === JSON.stringify(remoteItem);
-      if(!same && (fieldName === 'entries' || fieldName === 'movieEntries')){
-        console.warn(`[drive-merge] ${fieldName} id=${id} difiere entre local y remoto — se usa ${driveConflictPreferLocal ? 'LOCAL' : 'REMOTO'}.`, { local: localItem, remote: remoteItem });
-      }
-      result.push(same ? localItem : (driveConflictPreferLocal ? localItem : remoteItem));
+      result.push(JSON.stringify(localItem) === JSON.stringify(remoteItem)
+        ? localItem
+        : (driveConflictPreferLocal ? localItem : remoteItem));
     } else if(inLocal && !inRemote){
-      if(inBase){
-        if(fieldName === 'entries' || fieldName === 'movieEntries'){
-          console.warn(`[drive-merge] ${fieldName} id=${id} se DESCARTA: estaba en la base y ya no está en remoto (se interpreta como borrado allá).`, localMap.get(id));
-        }
-        return; // existía antes y ya no está en remoto: lo borraron allá, no lo resucitamos
-      }
+      if(inBase) return; // existía antes y ya no está en remoto: lo borraron allá, no lo resucitamos
       result.push(localMap.get(id)); // es nuevo en este dispositivo
     } else if(inRemote && !inLocal){
-      if(inBase){
-        if(fieldName === 'entries' || fieldName === 'movieEntries'){
-          console.warn(`[drive-merge] ${fieldName} id=${id} se DESCARTA: estaba en la base y ya no está en local (se interpreta como borrado acá).`, remoteMap.get(id));
-        }
-        return; // lo borramos acá, no lo resucitamos
-      }
+      if(inBase) return; // lo borramos acá, no lo resucitamos
       result.push(remoteMap.get(id)); // es nuevo en Drive (vino de otro dispositivo)
     }
   });
@@ -2914,7 +2860,7 @@ function mergeAllData(base, local, remote, preferLocalOnConflict){
   driveConflictPreferLocal = preferLocalOnConflict;
   base = base || {};
   const merged = {};
-  DRIVE_ID_ARRAY_FIELDS.forEach(f => { merged[f] = mergeArraysById(base[f], local[f], remote[f], f); });
+  DRIVE_ID_ARRAY_FIELDS.forEach(f => { merged[f] = mergeArraysById(base[f], local[f], remote[f]); });
   DRIVE_DICT_FIELDS.forEach(f => { merged[f] = mergeDicts(base[f], local[f], remote[f]); });
   merged.deletedIds = mergeDeletedIds(local.deletedIds, remote.deletedIds);
   // Última barrera, ya dentro del propio merge: ningún ID marcado como borrado sobrevive.
@@ -3045,37 +2991,28 @@ async function driveDownloadFile(fileId){
 
 async function driveUploadFile(content){
   const jsonStr = JSON.stringify(content);
-  const bodyBlob = new Blob([jsonStr], { type: 'application/json' });
-
   if(driveFileId){
-    // Subida "resumable": a diferencia de la subida simple (que Google limita a 5MB),
-    // esta no tiene ese techo. Con música/portadas acumuladas el archivo puede superar
-    // fácil los 5MB, y una subida simple que fallara por peso lo hacía en silencio —
-    // sin romper nada visible — dejando que la próxima fusión comparara contra una
-    // versión vieja de Drive y borrara cosas agregadas recientemente.
-    const initRes = await driveApiFetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=resumable`,
-      { method: 'PATCH', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' }, body: JSON.stringify({ name: DRIVE_FILE_NAME }) }
-    );
-    if(!initRes.ok) throw new Error('No se pudo iniciar la subida a Drive (' + initRes.status + ')');
-    const uploadUrl = initRes.headers.get('Location');
-    if(!uploadUrl) throw new Error('Drive no devolvió una URL de subida (sesión resumable)');
-    const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: bodyBlob });
-    if(!putRes.ok) throw new Error('No se pudo completar la subida a Drive (' + putRes.status + ')');
-    return await putRes.json();
+    const res = await driveApiFetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: jsonStr
+    });
+    if(!res.ok) throw new Error('No se pudo actualizar el archivo en Drive');
+    return await res.json();
   }
-
+  const boundary = 'bitacora_boundary_' + Date.now();
   const metadata = { name: DRIVE_FILE_NAME, mimeType: 'application/json' };
-  const initRes = await driveApiFetch(
-    `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' }, body: JSON.stringify(metadata) }
-  );
-  if(!initRes.ok) throw new Error('No se pudo iniciar la creación del archivo en Drive (' + initRes.status + ')');
-  const uploadUrl = initRes.headers.get('Location');
-  if(!uploadUrl) throw new Error('Drive no devolvió una URL de subida (sesión resumable)');
-  const putRes = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: bodyBlob });
-  if(!putRes.ok) throw new Error('No se pudo completar la creación del archivo en Drive (' + putRes.status + ')');
-  const data = await putRes.json();
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonStr}\r\n` +
+    `--${boundary}--`;
+  const res = await driveApiFetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`, {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  if(!res.ok) throw new Error('No se pudo crear el archivo en Drive');
+  const data = await res.json();
   driveFileId = data.id;
   localStorage.setItem(pk('driveFileId'), driveFileId);
   return data;
@@ -3098,8 +3035,8 @@ async function driveMergeWithRemote(){
       const remoteData = await driveDownloadFile(driveFileId);
       const base = driveGetBaseSnapshot();
 
-      if(JSON.stringify(remoteData) === JSON.stringify(collectDataForDriveSync())){
-        driveSetBaseSnapshot(collectDataForDriveSync());
+      if(JSON.stringify(remoteData) === JSON.stringify(collectAllData())){
+        driveSetBaseSnapshot(collectAllData());
         localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
         driveSetStatus('connected', 'Google Drive: ya estaba al día');
         continue;
@@ -3110,17 +3047,14 @@ async function driveMergeWithRemote(){
       const remoteModified = remoteMeta ? remoteMeta.modifiedTime : null;
       const preferLocal = !remoteModified || (lastLocalChange && new Date(lastLocalChange) > new Date(remoteModified));
 
-      const freshLocalData = collectDataForDriveSync();
-      console.log('[drive-merge] arrancando fusión — local:', freshLocalData.entries.length, 'capítulos /', freshLocalData.movieEntries.length, 'películas · remoto:', remoteData.entries.length, 'capítulos /', remoteData.movieEntries.length, 'películas · preferLocal:', preferLocal);
+      const freshLocalData = collectAllData();
       const merged = mergeAllData(base, freshLocalData, remoteData, preferLocal);
-      console.log('[drive-merge] resultado fusionado:', merged.entries.length, 'capítulos /', merged.movieEntries.length, 'películas');
 
       driveApplyingRemote = true;
       await applyAllData(merged);
       driveApplyingRemote = false;
 
-      const finalData = collectDataForDriveSync();
-      console.log('[drive-merge] estado final tras aplicar (con filtro de deletedIds):', finalData.entries.length, 'capítulos /', finalData.movieEntries.length, 'películas');
+      const finalData = collectAllData();
       localStorage.setItem(DATA_KEY, JSON.stringify(collectDataForLocalStorage()));
       await driveUploadFile(finalData);
       driveSetBaseSnapshot(finalData);
@@ -3143,7 +3077,7 @@ async function driveSyncOnConnect(){
 
     if(!remoteMeta){
       // No existe archivo en Drive todavía: lo creamos con lo que hay local
-      const localData = collectDataForDriveSync();
+      const localData = collectAllData();
       await driveUploadFile(localData);
       driveSetBaseSnapshot(localData);
       localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
@@ -3168,7 +3102,7 @@ function scheduleDriveUpload(){
       if(driveFileId){
         await driveMergeWithRemote();
       } else {
-        const localData = collectDataForDriveSync();
+        const localData = collectAllData();
         await driveUploadFile(localData);
         driveSetBaseSnapshot(localData);
         localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
@@ -3191,7 +3125,7 @@ document.getElementById('btnSyncDriveNow').addEventListener('click', async () =>
     if(driveFileId){
       await driveMergeWithRemote();
     } else {
-      const localData = collectDataForDriveSync();
+      const localData = collectAllData();
       await driveUploadFile(localData);
       driveSetBaseSnapshot(localData);
       localStorage.setItem(pk('driveLastSyncedIso'), new Date().toISOString());
@@ -3753,322 +3687,6 @@ document.getElementById('durationModalOverlay').addEventListener('click', (e) =>
   if(e.target.id === 'durationModalOverlay') closeDurationSettings();
 });
 
-/*GÉNERO / TIPO*/
-function populateGenreSelects(){
-  const opts = '<option value="">Sin especificar</option>' + GENRES.map(g => `<option value="${g}">${g}</option>`).join('');
-  ['fGenero','bGenero','mGenero'].forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.innerHTML = opts;
-  });
-  const filterOpts = '<option value="todos">Todos los géneros</option>' + GENRES.map(g => `<option value="${g}">${g}</option>`).join('');
-  const fFilter = document.getElementById('fGenreFilter');
-  if(fFilter) fFilter.innerHTML = filterOpts;
-  const mFilter = document.getElementById('mGenreFilter');
-  if(mFilter) mFilter.innerHTML = filterOpts;
-  const rFilter = document.getElementById('rankGenreFilter');
-  if(rFilter) rFilter.innerHTML = filterOpts;
-}
-
-function populateSagaList(){
-  const set = new Set();
-  Object.values(sagas).forEach(s => { if(s) set.add(s); });
-  const list = document.getElementById('sagaList');
-  if(list) list.innerHTML = [...set].sort((a,b) => a.localeCompare(b)).map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
-}
-
-function getGenreList(name){ return genres[seriesKey(name)] || []; }
-
-/*DURACIÓN: default automático según tipo*/
-function defaultDurationFor(mediaKind, tipoVal){
-  if(mediaKind === 'episode'){
-    if(tipoVal === 'live') return settings.episodeLive;
-    if(tipoVal === 'animada') return settings.episodeAnimada;
-    return settings.episodeDefault;
-  }
-  if(tipoVal === 'live') return settings.movieLive;
-  if(tipoVal === 'animada') return settings.movieAnimada;
-  return settings.movieDefault;
-}
-function wireTipoDurationDefault(tipoId, duracionId, mediaKind){
-  const tipoEl = document.getElementById(tipoId);
-  const durEl = document.getElementById(duracionId);
-  if(!tipoEl || !durEl) return;
-  tipoEl.addEventListener('change', () => {
-    if(!durEl.value){ durEl.value = defaultDurationFor(mediaKind, tipoEl.value); }
-  });
-}
-wireTipoDurationDefault('fTipo', 'fDuracion', 'episode');
-wireTipoDurationDefault('bTipo', 'bDuracion', 'episode');
-wireTipoDurationDefault('mTipo', 'mDuracion', 'movie');
-function getGenre(name){ return getGenreList(name).join(', '); }
-function getType(name){ return types[seriesKey(name)] || ''; }
-function getMovieGenreList(name){ return movieGenres[seriesKey(name)] || []; }
-function getMovieGenre(name){ return getMovieGenreList(name).join(', '); }
-function getMovieType(name){ return movieTypes[seriesKey(name)] || ''; }
-
-function tagsHtml(genreStr, type){
-  const parts = [];
-  (genreStr ? genreStr.split(', ') : []).forEach(g => {
-    parts.push(`<span class="tag-pill genre">${escapeHtml(g)}</span>`);
-  });
-  if(type) parts.push(`<span class="tag-pill type-${type}">${TYPE_LABELS[type] || type}</span>`);
-  return parts.join('');
-}
-
-function updateGlobalStats(){
-  document.getElementById('statEpisodes').textContent = entries.length;
-  const seriesSet = new Set(entries.map(e => seriesKey(e.serie)));
-  document.getElementById('statSeries').textContent = seriesSet.size;
-  document.getElementById('statMovies').textContent = movieEntries.length;
-  document.getElementById('statAllPending').textContent = pending.length + moviePending.length;
-
-  const allDated = [...entries, ...movieEntries].filter(e => e.date);
-  if(allDated.length){
-    allDated.sort((a,b) => sortKeyOf(b) - sortKeyOf(a));
-    document.getElementById('statLast').textContent = fmtDate(allDated[0].date, allDated[0].time);
-  } else {
-    document.getElementById('statLast').textContent = '—';
-  }
-}
-
-/*SERIES: portadas*/
-function resizeImageToDataUrl(file, maxSize, quality){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('No se pudo cargar la imagen'));
-      img.onload = () => {
-        const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
-        const w = Math.max(1, Math.round(img.width * ratio));
-        const h = Math.max(1, Math.round(img.height * ratio));
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function openCoverPicker(name){
-  pendingCoverSeries = name;
-  document.getElementById('coverFileInput').click();
-}
-async function removeCover(name){
-  const key = seriesKey(name);
-  const removed = covers[key];
-  if(!removed) return;
-  delete covers[key];
-  render();
-  await saveAll();
-  showUndoToast('Portada eliminada.', async () => {
-    covers[key] = removed;
-    render();
-    await saveAll();
-  });
-}
-window.openCoverPicker = openCoverPicker;
-window.removeCover = removeCover;
-
-document.getElementById('coverFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if(!file || !pendingCoverSeries) return;
-  try{
-    const dataUrl = await resizeImageToDataUrl(file, 200, 0.78);
-    covers[seriesKey(pendingCoverSeries)] = dataUrl;
-    await saveAll();
-    render();
-  }catch(err){ console.error('No se pudo procesar la portada', err); }
-  pendingCoverSeries = null;
-});
-
-document.getElementById('btnBulkCover').addEventListener('click', () => {
-  const bulkErr = document.getElementById('bulkErrMsg');
-  const serie = document.getElementById('bSerie').value.trim();
-  if(!serie){
-    bulkErr.textContent = 'Escribe primero el nombre de la serie para poder elegirle portada.';
-    bulkErr.style.display = 'block';
-    return;
-  }
-  bulkErr.style.display = 'none';
-  openCoverPicker(serie);
-});
-
-/*MÚSICA DE CARPETA (compartido)*/
-const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // ~20MB — ahora vive en IndexedDB, no en localStorage, así que hay mucho más margen
-
-function readFileAsDataUrl(file){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(file);
-  });
-}
-
-function playFolderMusic(audioKey, dataUrl){
-  // Detiene cualquier música que estuviera sonando de otra carpeta
-  if(currentAudio){
-    currentAudio.pause();
-    currentAudio = null;
-    currentAudioKey = null;
-  }
-  if(!dataUrl) return;
-  currentAudio = new Audio(dataUrl);
-  currentAudio.loop = true;
-  currentAudioKey = audioKey;
-  currentAudio.play().catch(() => {
-    // Reproducción bloqueada por el navegador hasta interacción; se ignora silenciosamente
-  });
-}
-
-function stopFolderMusic(audioKey){
-  if(currentAudioKey === audioKey && currentAudio){
-    currentAudio.pause();
-    currentAudio = null;
-    currentAudioKey = null;
-  }
-}
-
-function openMusicPicker(name){
-  pendingMusicSeries = name;
-  document.getElementById('audioFileInput').click();
-}
-async function removeFolderMusic(name){
-  const key = seriesKey(name);
-  const removed = folderMusic[key];
-  if(!removed) return;
-  delete folderMusic[key];
-  await audioDbDelete('series:' + key);
-  stopFolderMusic('series:' + key);
-  render();
-  await saveAll();
-  showUndoToast('Música de la carpeta eliminada.', async () => {
-    folderMusic[key] = removed;
-    await audioDbSet('series:' + key, removed);
-    render();
-    await saveAll();
-  });
-}
-window.openMusicPicker = openMusicPicker;
-window.removeFolderMusic = removeFolderMusic;
-
-document.getElementById('audioFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if(!file || !pendingMusicSeries) return;
-  if(file.size > MAX_AUDIO_BYTES){
-    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elige un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
-    pendingMusicSeries = null;
-    return;
-  }
-  try{
-    const dataUrl = await readFileAsDataUrl(file);
-    const key = seriesKey(pendingMusicSeries);
-    const value = { name: file.name, dataUrl };
-    folderMusic[key] = value;
-    await audioDbSet('series:' + key, value);
-    await saveAll();
-    render();
-  }catch(err){
-    console.error('No se pudo procesar/guardar el audio', err);
-    await customAlert('No se pudo guardar este audio. Probá con un archivo más liviano.', { icon:'🎵', title:'Error al guardar' });
-  }
-  pendingMusicSeries = null;
-});
-
-/*SERIES: status / expand*/
-const STATUS_LABELS = { curso: 'En curso', terminada: 'Terminada', rewatch: 'Repitiendo', abandonada: 'Abandonada' };
-const STATUS_ORDER = ['curso', 'terminada', 'rewatch', 'abandonada'];
-const ABANDON_DAYS = 30;
-
-function getStatus(name){ return status[seriesKey(name)] || 'curso'; }
-
-function lastEpisodeDateOf(name){
-  const key = seriesKey(name);
-  const dated = entries.filter(e => seriesKey(e.serie) === key && e.date).map(e => e.date).sort();
-  return dated.length ? dated[dated.length - 1] : null;
-}
-
-function distinctEpisodeCountOf(name){
-  const key = seriesKey(name);
-  const set = new Set();
-  entries.forEach(e => {
-    if(seriesKey(e.serie) === key) set.add(`${e.season ?? ''}|${e.episode ?? ''}`);
-  });
-  return set.size;
-}
-
-function autoCompleteFinishedSeries(){
-  const names = new Set(entries.map(e => e.serie.trim()));
-  const justCompleted = [];
-  names.forEach(name => {
-    const key = seriesKey(name);
-    if(getStatus(name) !== 'curso') return;
-    const goal = getSeriesGoal(name);
-    if(!goal) return;
-    if(distinctEpisodeCountOf(name) >= goal){
-      status[key] = 'terminada';
-      statusManualAt[key] = Date.now();
-      justCompleted.push(name);
-    }
-  });
-  return justCompleted;
-}
-
-function notifyAutoCompleted(names){
-  names.forEach(name => {
-    const key = seriesKey(name);
-    showUndoToast(`"${name}" llegó al 100% de su meta y pasó a Terminada.`, async () => {
-      status[key] = 'curso';
-      statusManualAt[key] = Date.now();
-      render();
-      await saveAll();
-    });
-  });
-}
-
-function autoUpdateAbandonedSeries(){
-  const names = new Set(entries.map(e => e.serie.trim()));
-  const todayMs = Date.now();
-  let changed = false;
-  names.forEach(name => {
-    const key = seriesKey(name);
-    if(getStatus(name) !== 'curso') return;
-    const lastDate = lastEpisodeDateOf(name);
-    const lastDateMs = lastDate ? new Date(lastDate).getTime() : 0;
-    const manualMs = statusManualAt[key] || 0;
-    const lastActivityMs = Math.max(lastDateMs, manualMs);
-    if(!lastActivityMs) return;
-    const daysSince = (todayMs - lastActivityMs) / 86400000;
-    if(daysSince > ABANDON_DAYS){
-      status[key] = 'abandonada';
-      changed = true;
-    }
-  });
-  return changed;
-}
-
-function getSeriesGoal(name){ return seriesGoals[seriesKey(name)] || 0; }
-async function setSeriesGoal(name){
-  const key = seriesKey(name);
-  const current = getSeriesGoal(name);
-  const input = await customPrompt(`¿Cuántos capítulos en total tiene "${name}"?\n(Déjalo vacío o en 0 para quitar la barra de progreso)`, current || '', { icon:'🎯', title:'Meta de episodios', okText:'Guardar' });
-  if(input === null) return; // cancelado
-  const n = parseInt(input, 10);
-  if(!n || n <= 0){ delete seriesGoals[key]; }
-  else { seriesGoals[key] = n; }
-  notifyAutoCompleted(autoCompleteFinishedSeries());
-  render();
-  await saveAll();
-}
-window.setSeriesGoal = setSeriesGoal;
-
 /*META AUTOMÁTICA (Jikan/TMDB)*/
 // Consulta la fuente vinculada a la serie y devuelve el total de episodios más actual que conoce, o null.
 async function fetchLatestEpisodeTotal(link){
@@ -4371,6 +3989,392 @@ function toggleExpand(name){
 }
 window.toggleExpand = toggleExpand;
 
+/*GÉNERO / TIPO*/
+function populateGenreSelects(){
+  const opts = '<option value="">Sin especificar</option>' + GENRES.map(g => `<option value="${g}">${g}</option>`).join('');
+  ['fGenero','bGenero','mGenero'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = opts;
+  });
+  const filterOpts = '<option value="todos">Todos los géneros</option>' + GENRES.map(g => `<option value="${g}">${g}</option>`).join('');
+  const fFilter = document.getElementById('fGenreFilter');
+  if(fFilter) fFilter.innerHTML = filterOpts;
+  const mFilter = document.getElementById('mGenreFilter');
+  if(mFilter) mFilter.innerHTML = filterOpts;
+  const rFilter = document.getElementById('rankGenreFilter');
+  if(rFilter) rFilter.innerHTML = filterOpts;
+}
+
+function populateSagaList(){
+  const set = new Set();
+  Object.values(sagas).forEach(s => { if(s) set.add(s); });
+  const list = document.getElementById('sagaList');
+  if(list) list.innerHTML = [...set].sort((a,b) => a.localeCompare(b)).map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
+}
+
+function getGenreList(name){ return genres[seriesKey(name)] || []; }
+
+/*DURACIÓN: default automático según tipo*/
+function defaultDurationFor(mediaKind, tipoVal){
+  if(mediaKind === 'episode'){
+    if(tipoVal === 'live') return settings.episodeLive;
+    if(tipoVal === 'animada') return settings.episodeAnimada;
+    return settings.episodeDefault;
+  }
+  if(tipoVal === 'live') return settings.movieLive;
+  if(tipoVal === 'animada') return settings.movieAnimada;
+  return settings.movieDefault;
+}
+function wireTipoDurationDefault(tipoId, duracionId, mediaKind){
+  const tipoEl = document.getElementById(tipoId);
+  const durEl = document.getElementById(duracionId);
+  if(!tipoEl || !durEl) return;
+  tipoEl.addEventListener('change', () => {
+    if(!durEl.value){ durEl.value = defaultDurationFor(mediaKind, tipoEl.value); }
+  });
+}
+wireTipoDurationDefault('fTipo', 'fDuracion', 'episode');
+wireTipoDurationDefault('bTipo', 'bDuracion', 'episode');
+wireTipoDurationDefault('mTipo', 'mDuracion', 'movie');
+function getGenre(name){ return getGenreList(name).join(', '); }
+function getType(name){ return types[seriesKey(name)] || ''; }
+function getMovieGenreList(name){ return movieGenres[seriesKey(name)] || []; }
+function getMovieGenre(name){ return getMovieGenreList(name).join(', '); }
+function getMovieType(name){ return movieTypes[seriesKey(name)] || ''; }
+
+function tagsHtml(genreStr, type){
+  const parts = [];
+  (genreStr ? genreStr.split(', ') : []).forEach(g => {
+    parts.push(`<span class="tag-pill genre">${escapeHtml(g)}</span>`);
+  });
+  if(type) parts.push(`<span class="tag-pill type-${type}">${TYPE_LABELS[type] || type}</span>`);
+  return parts.join('');
+}
+
+function updateGlobalStats(){
+  document.getElementById('statEpisodes').textContent = entries.length;
+  const seriesSet = new Set(entries.map(e => seriesKey(e.serie)));
+  document.getElementById('statSeries').textContent = seriesSet.size;
+  document.getElementById('statMovies').textContent = movieEntries.length;
+  document.getElementById('statAllPending').textContent = pending.length + moviePending.length;
+
+  const allDated = [...entries, ...movieEntries].filter(e => e.date);
+  if(allDated.length){
+    allDated.sort((a,b) => sortKeyOf(b) - sortKeyOf(a));
+    document.getElementById('statLast').textContent = fmtDate(allDated[0].date, allDated[0].time);
+  } else {
+    document.getElementById('statLast').textContent = '—';
+  }
+}
+
+/*MODAL: editar género / tipo*/
+let genreModalTarget = null; // { type:'series'|'movie', name: string }
+
+function openGenreModal(type, name){
+  genreModalTarget = { type, name };
+  const currentGenres = type === 'series' ? getGenreList(name) : getMovieGenreList(name);
+  const currentType = type === 'series' ? getType(name) : getMovieType(name);
+  const currentDuration = type === 'series' ? (seriesDuration[seriesKey(name)] || '') : (movieDuration[seriesKey(name)] || '');
+  const currentSaga = sagas[seriesKey(name)] || '';
+
+  document.getElementById('genreModalTitle').textContent = `Género y tipo — ${name}`;
+  document.getElementById('genreCheckGrid').innerHTML = GENRES.map(g => `
+    <label class="genre-check-pill ${currentGenres.includes(g) ? 'checked' : ''}">
+      <input type="checkbox" value="${escapeHtml(g)}" ${currentGenres.includes(g) ? 'checked' : ''}
+        onchange="this.closest('label').classList.toggle('checked', this.checked)">
+      ${escapeHtml(g)}
+    </label>`).join('');
+  document.getElementById('genreModalType').value = currentType || '';
+  document.getElementById('genreModalDurationLabel').textContent = type === 'series' ? 'Duración por episodio (min)' : 'Duración de la película (min)';
+  document.getElementById('genreModalDuration').value = currentDuration;
+  // La saga/franquicia de películas ahora se maneja con el sistema de franquicias (meta editable),
+  // así que este campo libre solo aplica a series.
+  document.getElementById('genreModalSagaRow').style.display = type === 'series' ? 'flex' : 'none';
+  if(type === 'series'){
+    populateSagaList();
+    document.getElementById('genreModalSaga').value = currentSaga;
+  }
+  document.getElementById('genreModalOverlay').style.display = 'flex';
+}
+
+function closeGenreModal(){
+  document.getElementById('genreModalOverlay').style.display = 'none';
+  genreModalTarget = null;
+}
+
+async function saveGenreModal(){
+  if(!genreModalTarget) return;
+  const { type, name } = genreModalTarget;
+  const key = seriesKey(name);
+  const selected = [...document.querySelectorAll('#genreCheckGrid input:checked')].map(i => i.value);
+  const typeVal = document.getElementById('genreModalType').value;
+  const durationVal = parseInt(document.getElementById('genreModalDuration').value, 10);
+
+  if(type === 'series'){
+    const sagaVal = document.getElementById('genreModalSaga').value.trim();
+    if(selected.length) genres[key] = selected; else delete genres[key];
+    if(typeVal) types[key] = typeVal; else delete types[key];
+    if(durationVal > 0) seriesDuration[key] = durationVal; else delete seriesDuration[key];
+    if(sagaVal) sagas[key] = sagaVal; else delete sagas[key];
+    populateSagaList();
+    render();
+  } else {
+    if(selected.length) movieGenres[key] = selected; else delete movieGenres[key];
+    if(typeVal) movieTypes[key] = typeVal; else delete movieTypes[key];
+    if(durationVal > 0) movieDuration[key] = durationVal; else delete movieDuration[key];
+    renderMovies();
+  }
+  closeGenreModal();
+  await saveAll();
+}
+
+window.openGenreModal = openGenreModal;
+window.closeGenreModal = closeGenreModal;
+
+document.getElementById('genreModalClose').addEventListener('click', closeGenreModal);
+document.getElementById('genreModalSave').addEventListener('click', saveGenreModal);
+document.getElementById('genreModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'genreModalOverlay') closeGenreModal();
+});
+
+/*SERIES: portadas*/
+function resizeImageToDataUrl(file, maxSize, quality){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('No se pudo cargar la imagen'));
+      img.onload = () => {
+        const ratio = Math.min(maxSize / img.width, maxSize / img.height, 1);
+        const w = Math.max(1, Math.round(img.width * ratio));
+        const h = Math.max(1, Math.round(img.height * ratio));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function openCoverPicker(name){
+  pendingCoverSeries = name;
+  document.getElementById('coverFileInput').click();
+}
+async function removeCover(name){
+  const key = seriesKey(name);
+  const removed = covers[key];
+  if(!removed) return;
+  delete covers[key];
+  render();
+  await saveAll();
+  showUndoToast('Portada eliminada.', async () => {
+    covers[key] = removed;
+    render();
+    await saveAll();
+  });
+}
+window.openCoverPicker = openCoverPicker;
+window.removeCover = removeCover;
+
+document.getElementById('coverFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file || !pendingCoverSeries) return;
+  try{
+    const dataUrl = await resizeImageToDataUrl(file, 200, 0.78);
+    covers[seriesKey(pendingCoverSeries)] = dataUrl;
+    await saveAll();
+    render();
+  }catch(err){ console.error('No se pudo procesar la portada', err); }
+  pendingCoverSeries = null;
+});
+
+document.getElementById('btnBulkCover').addEventListener('click', () => {
+  const bulkErr = document.getElementById('bulkErrMsg');
+  const serie = document.getElementById('bSerie').value.trim();
+  if(!serie){
+    bulkErr.textContent = 'Escribe primero el nombre de la serie para poder elegirle portada.';
+    bulkErr.style.display = 'block';
+    return;
+  }
+  bulkErr.style.display = 'none';
+  openCoverPicker(serie);
+});
+
+/*MÚSICA DE CARPETA (compartido)*/
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024; // ~20MB — ahora vive en IndexedDB, no en localStorage, así que hay mucho más margen
+
+function readFileAsDataUrl(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+function playFolderMusic(audioKey, dataUrl){
+  // Detiene cualquier música que estuviera sonando de otra carpeta
+  if(currentAudio){
+    currentAudio.pause();
+    currentAudio = null;
+    currentAudioKey = null;
+  }
+  if(!dataUrl) return;
+  currentAudio = new Audio(dataUrl);
+  currentAudio.loop = true;
+  currentAudioKey = audioKey;
+  currentAudio.play().catch(() => {
+    // Reproducción bloqueada por el navegador hasta interacción; se ignora silenciosamente
+  });
+}
+
+function stopFolderMusic(audioKey){
+  if(currentAudioKey === audioKey && currentAudio){
+    currentAudio.pause();
+    currentAudio = null;
+    currentAudioKey = null;
+  }
+}
+
+function openMusicPicker(name){
+  pendingMusicSeries = name;
+  document.getElementById('audioFileInput').click();
+}
+async function removeFolderMusic(name){
+  const key = seriesKey(name);
+  const removed = folderMusic[key];
+  if(!removed) return;
+  delete folderMusic[key];
+  await audioDbDelete('series:' + key);
+  stopFolderMusic('series:' + key);
+  render();
+  await saveAll();
+  showUndoToast('Música de la carpeta eliminada.', async () => {
+    folderMusic[key] = removed;
+    await audioDbSet('series:' + key, removed);
+    render();
+    await saveAll();
+  });
+}
+window.openMusicPicker = openMusicPicker;
+window.removeFolderMusic = removeFolderMusic;
+
+document.getElementById('audioFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file || !pendingMusicSeries) return;
+  if(file.size > MAX_AUDIO_BYTES){
+    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elige un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
+    pendingMusicSeries = null;
+    return;
+  }
+  try{
+    const dataUrl = await readFileAsDataUrl(file);
+    const key = seriesKey(pendingMusicSeries);
+    const value = { name: file.name, dataUrl };
+    folderMusic[key] = value;
+    await audioDbSet('series:' + key, value);
+    await saveAll();
+    render();
+  }catch(err){
+    console.error('No se pudo procesar/guardar el audio', err);
+    await customAlert('No se pudo guardar este audio. Probá con un archivo más liviano.', { icon:'🎵', title:'Error al guardar' });
+  }
+  pendingMusicSeries = null;
+});
+
+/*SERIES: status / expand*/
+const STATUS_LABELS = { curso: 'En curso', terminada: 'Terminada', rewatch: 'Repitiendo', abandonada: 'Abandonada' };
+const STATUS_ORDER = ['curso', 'terminada', 'rewatch', 'abandonada'];
+const ABANDON_DAYS = 30;
+
+function getStatus(name){ return status[seriesKey(name)] || 'curso'; }
+
+function lastEpisodeDateOf(name){
+  const key = seriesKey(name);
+  const dated = entries.filter(e => seriesKey(e.serie) === key && e.date).map(e => e.date).sort();
+  return dated.length ? dated[dated.length - 1] : null;
+}
+
+function distinctEpisodeCountOf(name){
+  const key = seriesKey(name);
+  const set = new Set();
+  entries.forEach(e => {
+    if(seriesKey(e.serie) === key) set.add(`${e.season ?? ''}|${e.episode ?? ''}`);
+  });
+  return set.size;
+}
+
+function autoCompleteFinishedSeries(){
+  const names = new Set(entries.map(e => e.serie.trim()));
+  const justCompleted = [];
+  names.forEach(name => {
+    const key = seriesKey(name);
+    if(getStatus(name) !== 'curso') return;
+    const goal = getSeriesGoal(name);
+    if(!goal) return;
+    if(distinctEpisodeCountOf(name) >= goal){
+      status[key] = 'terminada';
+      statusManualAt[key] = Date.now();
+      justCompleted.push(name);
+    }
+  });
+  return justCompleted;
+}
+
+function notifyAutoCompleted(names){
+  names.forEach(name => {
+    const key = seriesKey(name);
+    showUndoToast(`"${name}" llegó al 100% de su meta y pasó a Terminada.`, async () => {
+      status[key] = 'curso';
+      statusManualAt[key] = Date.now();
+      render();
+      await saveAll();
+    });
+  });
+}
+
+function autoUpdateAbandonedSeries(){
+  const names = new Set(entries.map(e => e.serie.trim()));
+  const todayMs = Date.now();
+  let changed = false;
+  names.forEach(name => {
+    const key = seriesKey(name);
+    if(getStatus(name) !== 'curso') return;
+    const lastDate = lastEpisodeDateOf(name);
+    const lastDateMs = lastDate ? new Date(lastDate).getTime() : 0;
+    const manualMs = statusManualAt[key] || 0;
+    const lastActivityMs = Math.max(lastDateMs, manualMs);
+    if(!lastActivityMs) return;
+    const daysSince = (todayMs - lastActivityMs) / 86400000;
+    if(daysSince > ABANDON_DAYS){
+      status[key] = 'abandonada';
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function getSeriesGoal(name){ return seriesGoals[seriesKey(name)] || 0; }
+async function setSeriesGoal(name){
+  const key = seriesKey(name);
+  const current = getSeriesGoal(name);
+  const input = await customPrompt(`¿Cuántos capítulos en total tiene "${name}"?\n(Déjalo vacío o en 0 para quitar la barra de progreso)`, current || '', { icon:'🎯', title:'Meta de episodios', okText:'Guardar' });
+  if(input === null) return; // cancelado
+  const n = parseInt(input, 10);
+  if(!n || n <= 0){ delete seriesGoals[key]; }
+  else { seriesGoals[key] = n; }
+  notifyAutoCompleted(autoCompleteFinishedSeries());
+  render();
+  await saveAll();
+}
+window.setSeriesGoal = setSeriesGoal;
+
 /*SERIES: CRUD*/
 function purgeOldTrash(){
   const cutoff = Date.now() - 15 * 86400000;
@@ -4551,365 +4555,6 @@ function jumpToSerie(name, nextSeason = '', nextEpisode = ''){
   }
 }
 window.jumpToSerie = jumpToSerie;
-
-/*BÚSQUEDA GLOBAL (series + películas, desde cualquier pestaña)*/
-let globalSearchMatches = [];
-
-function buildGlobalSearchIndex(){
-  const items = [];
-
-  const seriesNames = [...new Set(entries.map(e => e.serie.trim()))];
-  seriesNames.forEach(name => {
-    const key = seriesKey(name);
-    const count = entries.filter(e => seriesKey(e.serie) === key).length;
-    items.push({
-      kind: 'series',
-      groupName: name,
-      matchNames: [name],
-      cover: covers[key] || null,
-      badge: `${count} ${count === 1 ? 'episodio' : 'episodios'}`,
-      extra: STATUS_LABELS[getStatus(name)] || ''
-    });
-  });
-
-  const { groups, order } = groupMovieEntries(movieEntries);
-  order.forEach(groupKey => {
-    const g = groups[groupKey];
-    const dispKey = seriesKey(g.displayName);
-    const matchNames = g.isFranchise ? [g.displayName, ...g.items.map(e => e.title.trim())] : [g.displayName];
-    const distinctTitles = new Set(g.items.map(e => seriesKey(e.title))).size;
-    items.push({
-      kind: 'movie',
-      groupName: g.displayName,
-      matchNames,
-      cover: movieCovers[dispKey] || null,
-      badge: g.isFranchise ? `${distinctTitles} películas` : `${g.items.length} ${g.items.length === 1 ? 'visionado' : 'visionados'}`,
-      extra: g.isFranchise ? '🎞️ Franquicia' : ''
-    });
-  });
-
-  return items;
-}
-
-function openGlobalSearch(){
-  document.getElementById('globalSearchInput').value = '';
-  document.getElementById('globalSearchResults').innerHTML = '';
-  document.getElementById('globalSearchEmptyMsg').textContent = 'Escribí algo para buscar.';
-  document.getElementById('globalSearchEmptyMsg').style.display = 'block';
-  globalSearchMatches = [];
-  document.getElementById('globalSearchModalOverlay').style.display = 'flex';
-  setTimeout(() => document.getElementById('globalSearchInput').focus(), 30);
-}
-function closeGlobalSearch(){
-  document.getElementById('globalSearchModalOverlay').style.display = 'none';
-}
-window.openGlobalSearch = openGlobalSearch;
-
-function runGlobalSearch(){
-  const query = document.getElementById('globalSearchInput').value.trim().toLowerCase();
-  const resultsEl = document.getElementById('globalSearchResults');
-  const emptyEl = document.getElementById('globalSearchEmptyMsg');
-
-  if(!query){
-    resultsEl.innerHTML = '';
-    globalSearchMatches = [];
-    emptyEl.textContent = 'Escribí algo para buscar.';
-    emptyEl.style.display = 'block';
-    return;
-  }
-
-  const index = buildGlobalSearchIndex();
-  globalSearchMatches = index.filter(item => item.matchNames.some(n => n.toLowerCase().includes(query)));
-
-  if(!globalSearchMatches.length){
-    resultsEl.innerHTML = '';
-    emptyEl.textContent = 'Sin resultados.';
-    emptyEl.style.display = 'block';
-    return;
-  }
-
-  emptyEl.style.display = 'none';
-  resultsEl.innerHTML = globalSearchMatches.map((item, i) => `
-    <div class="title-search-result" onclick="goToGlobalSearchResult(${i})">
-      <div class="title-search-result-cover" style="${item.cover ? `background-image:url('${item.cover}')` : ''}">${item.cover ? '' : (item.kind === 'series' ? '📺' : '🎬')}</div>
-      <div class="title-search-result-info">
-        <div class="title-search-result-name">${escapeHtml(item.groupName)}</div>
-        <div class="title-search-result-sub">${item.kind === 'series' ? '📺 Serie' : '🎬 Película'} · ${escapeHtml(item.badge)}${item.extra ? ' · ' + escapeHtml(item.extra) : ''}</div>
-      </div>
-    </div>`).join('');
-}
-window.runGlobalSearch = runGlobalSearch;
-
-function goToGlobalSearchResult(idx){
-  const item = globalSearchMatches[idx];
-  if(!item) return;
-  closeGlobalSearch();
-  const key = seriesKey(item.groupName);
-
-  if(item.kind === 'series'){
-    switchMainTab('series');
-    switchSeriesSub('log');
-    if(!expandedSeries.has(key)){
-      expandedSeries.add(key);
-      playFolderMusic('series:' + key, (folderMusic[key] || {}).dataUrl);
-    }
-    render();
-  } else {
-    switchMainTab('peliculas');
-    switchMovieSub('log');
-    if(!expandedMovies.has(key)){
-      expandedMovies.add(key);
-      playFolderMusic('movie:' + key, (movieFolderMusic[key] || {}).dataUrl);
-    }
-    renderMovies();
-  }
-
-  setTimeout(() => {
-    const el = document.querySelector(`.series-group[data-group-key="${CSS.escape(key)}"]`);
-    if(el) el.scrollIntoView({ behavior:'smooth', block:'center' });
-  }, 80);
-}
-window.goToGlobalSearchResult = goToGlobalSearchResult;
-
-document.getElementById('globalSearchFab').addEventListener('click', openGlobalSearch);
-document.getElementById('globalSearchModalClose').addEventListener('click', closeGlobalSearch);
-document.getElementById('globalSearchModalOverlay').addEventListener('click', (e) => {
-  if(e.target.id === 'globalSearchModalOverlay') closeGlobalSearch();
-});
-document.getElementById('globalSearchInput').addEventListener('input', runGlobalSearch);
-
-function renderTimeCapsulePanel(){
-  const panel = document.getElementById('timeCapsulePanel');
-  const list = document.getElementById('timeCapsuleList');
-
-  const today = new Date();
-  const todayMonth = pad(today.getMonth() + 1);
-  const todayDay = pad(today.getDate());
-  const currentYear = today.getFullYear();
-
-  const items = [];
-
-  entries.forEach(e => {
-    if(!e.date) return;
-    const [y, m, d] = e.date.split('-');
-    if(m !== todayMonth || d !== todayDay) return;
-    const yearsAgo = currentYear - parseInt(y, 10);
-    if(yearsAgo <= 0) return;
-    const tParts = [];
-    if(e.season !== '' && e.season != null) tParts.push(`T${pad(e.season)}`);
-    if(e.episode !== '' && e.episode != null) tParts.push(`E${pad(e.episode)}`);
-    const tag = tParts.length ? ` (${tParts.join(' ')})` : '';
-    items.push({
-      icon: '📺',
-      html: `Viste${tag} de <b>${escapeHtml(e.serie)}</b>`,
-      yearsAgo
-    });
-  });
-
-  movieEntries.forEach(e => {
-    if(!e.date) return;
-    const [y, m, d] = e.date.split('-');
-    if(m !== todayMonth || d !== todayDay) return;
-    const yearsAgo = currentYear - parseInt(y, 10);
-    if(yearsAgo <= 0) return;
-    items.push({
-      icon: '🎬',
-      html: `Viste <b>${escapeHtml(e.title)}</b>`,
-      yearsAgo
-    });
-  });
-
-  if(!items.length){ panel.style.display = 'none'; return; }
-
-  items.sort((a, b) => a.yearsAgo - b.yearsAgo);
-  panel.style.display = 'block';
-  list.innerHTML = items.slice(0, 20).map(it => `
-    <div class="upcoming-row">
-      <span class="upcoming-icon">${it.icon}</span>
-      <span class="upcoming-text">${it.html}</span>
-      <span class="upcoming-date">hace ${it.yearsAgo} ${it.yearsAgo === 1 ? 'año' : 'años'}</span>
-    </div>`).join('');
-}
-
-function render(){
-  renderContinueWatching();
-  renderTimeCapsulePanel();
-  updateSerieList();
-  const container = document.getElementById('logContainer');
-  const search = document.getElementById('fSearch').value.trim().toLowerCase();
-  const statusFilter = document.getElementById('fStatusFilter').value;
-
-  if(entries.length === 0){
-    container.innerHTML = `<div class="empty-state"><span class="big">Cinta vacía</span>Todavía no hay episodios registrados.<br>Registra el primero arriba.</div>`;
-    updateGlobalStats();
-    return;
-  }
-
-  const genreFilter = document.getElementById('fGenreFilter').value;
-  const typeFilter = document.getElementById('fTypeFilter').value;
-
-  const sortedAll = [...entries].sort((a,b) => sortKeyOf(b) - sortKeyOf(a));
-  let filtered = sortedAll.filter(e => {
-    if(search && !e.serie.toLowerCase().includes(search)) return false;
-    if(statusFilter !== 'todas' && getStatus(e.serie) !== statusFilter) return false;
-    if(genreFilter !== 'todos' && !getGenreList(e.serie).includes(genreFilter)) return false;
-    if(typeFilter !== 'todos' && getType(e.serie) !== typeFilter) return false;
-    return true;
-  });
-
-  if(filtered.length === 0){
-    container.innerHTML = `<div class="empty-state"><span class="big">Sin resultados</span>No hay episodios que coincidan con el filtro actual.</div>`;
-    updateGlobalStats();
-    return;
-  }
-
-  const groups = {}; const order = [];
-  filtered.forEach(e => {
-    const key = e.serie.trim();
-    if(!groups[key]){ groups[key] = []; order.push(key); }
-    groups[key].push(e);
-  });
-
-  const sortMode = document.getElementById('fSortFilter').value;
-  if(sortMode === 'nombre'){
-    order.sort((a,b) => a.localeCompare(b, 'es', {sensitivity:'base'}));
-  } else if(sortMode === 'calificacion'){
-    order.sort((a,b) => avgRatingOf(groups[b]) - avgRatingOf(groups[a]));
-  }
-  // 'reciente' ya queda resuelto por el orden natural de `filtered` (más reciente primero)
-
-  container.innerHTML = order.map(serie => {
-    const items = groups[serie].sort((a, b) => {
-      const sa = isNaN(parseInt(a.season,10)) ? 0 : parseInt(a.season,10);
-      const sb = isNaN(parseInt(b.season,10)) ? 0 : parseInt(b.season,10);
-      if(sa !== sb) return sa - sb;
-      const ea = isNaN(parseInt(a.episode,10)) ? 0 : parseInt(a.episode,10);
-      const eb = isNaN(parseInt(b.episode,10)) ? 0 : parseInt(b.episode,10);
-      return ea - eb;
-    });
-    const st = getStatus(serie);
-    const isOpen = expandedSeries.has(seriesKey(serie));
-    const cover = covers[seriesKey(serie)] || null;
-
-    const cards = items.map(e => {
-      if(e.id === editingId){
-        const ratingOptions = [0,1,2,3,4,5].map(v =>
-          `<option value="${v}" ${e.rating == v ? 'selected' : ''}>${v === 0 ? 'Sin calif.' : '★'.repeat(v)}</option>`
-        ).join('');
-        return `
-          <div class="entry-card editing" data-id="${e.id}">
-            <div class="edit-grid">
-              <div class="edit-field"><label>Temporada</label><input type="number" min="0" class="edit-season" value="${e.season ?? ''}"></div>
-              <div class="edit-field"><label>Capítulo</label><input type="number" min="0" class="edit-episode" value="${e.episode ?? ''}"></div>
-              <div class="edit-field"><label>Fecha</label><input type="text" class="edit-date" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" oninput="maskDateInput(this)" value="${e.date ? isoToDisplay(e.date) : ''}" ${!e.date ? 'disabled' : ''}></div>
-              <div class="edit-field"><label>Hora</label><input type="time" class="edit-time" value="${e.time || ''}" ${!e.date ? 'disabled' : ''}></div>
-            </div>
-            <label class="checkbox-row-inline edit-line">
-              <input type="checkbox" class="edit-date-unknown" ${!e.date ? 'checked' : ''}
-                onchange="const c=this.closest('.entry-card'); c.querySelector('.edit-date').disabled=this.checked; c.querySelector('.edit-time').disabled=this.checked;">
-              No recuerdo la fecha/hora exacta
-            </label>
-            <div class="edit-field full"><label>Calificación</label><select class="edit-rating">${ratingOptions}</select></div>
-            <label class="checkbox-row-inline edit-line"><input type="checkbox" class="edit-rewatch" ${e.rewatch ? 'checked' : ''}> 🔁 Es un rewatch</label>
-            <div class="edit-field full"><label>Nota</label><textarea class="edit-note">${escapeHtml(e.note || '')}</textarea></div>
-            <div class="edit-actions">
-              <button class="btn-mini save" onclick="saveEdit('${e.id}')">✔ Guardar</button>
-              <button class="btn-mini" onclick="cancelEdit()">✕ Cancelar</button>
-            </div>
-          </div>`;
-      }
-      const tParts = [];
-      if(e.season !== '' && e.season != null) tParts.push(`T${pad(e.season)}`);
-      if(e.episode !== '' && e.episode != null) tParts.push(`E${pad(e.episode)}`);
-      const tag = tParts.length ? tParts.join(' ') : 'Sin especificar';
-      const stars = starString(e.rating);
-      const isSelected = bulkSelectedIds.has(e.id);
-      return `
-        <div class="entry-card ${isSelected ? 'bulk-selected' : ''}" data-id="${e.id}">
-          <div style="display:flex; align-items:center; gap:10px; min-width:0;">
-            ${bulkEditMode ? `<input type="checkbox" class="entry-select-box" ${isSelected ? 'checked' : ''} onchange="toggleEntrySelection('${e.id}', this.closest('.entry-card'))">` : ''}
-            <div class="entry-left">
-              <div class="entry-tag-row">
-                <span class="entry-tag">${tag}</span>
-                ${stars ? `<span class="entry-stars">${stars}</span>` : ''}
-                ${e.rewatch ? `<span class="entry-rewatch">🔁 rewatch</span>` : ''}
-              </div>
-              <div class="entry-time">${fmtDate(e.date, e.time)}</div>
-              ${e.note ? `<div class="entry-note">"${escapeHtml(e.note)}"</div>` : ''}
-            </div>
-          </div>
-          <div class="entry-actions">
-            <button class="del-btn" onclick="startEdit('${e.id}')" title="Editar">✎</button>
-            <button class="del-btn" onclick="deleteEntry('${e.id}')" title="Eliminar registro">✕</button>
-          </div>
-        </div>`;
-    }).join('');
-
-    const groupGenre = getGenre(serie);
-    const groupType = getType(serie);
-    const groupSaga = sagas[seriesKey(serie)] || '';
-    const music = folderMusic[seriesKey(serie)] || null;
-    const isPlaying = currentAudioKey === 'series:' + seriesKey(serie);
-
-    const goal = getSeriesGoal(serie);
-    const watchedSet = new Set(items.map(e => `${e.season ?? ''}|${e.episode ?? ''}`));
-    const watchedCount = watchedSet.size;
-    const pct = goal > 0 ? Math.min(100, Math.round((watchedCount / goal) * 100)) : 0;
-    const isLinked = !!seriesApiLink[seriesKey(serie)];
-    const progressBarHtml = goal > 0 ? `
-        <div class="progress-row">
-          <div class="progress-track ${pct >= 100 ? 'complete' : ''}"><div class="progress-mask" style="width:${100 - pct}%"></div></div>
-          <span class="progress-label">${watchedCount}/${goal} · ${pct}%</span>
-          <button type="button" class="progress-goal-btn" onclick="setSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Editar meta de capítulos">editar meta</button>
-          ${isLinked ? `<button type="button" class="progress-refresh-btn" onclick="refreshSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Consultar ahora si hay un total nuevo (Jikan/TMDB)">🔄</button>` : ''}
-        </div>` : '';
-
-    return `
-      <div class="series-group" data-group-key="${seriesKey(serie)}">
-        <div class="series-header" onclick="toggleExpand(decodeURIComponent('${encodeURIComponent(serie)}'))">
-          <div class="series-name">
-            <span class="series-chevron ${isOpen ? 'open' : ''}">▸</span>
-            <span class="series-cover ${cover ? '' : 'empty'}"
-                  style="${cover ? `background-image:url('${cover}')` : ''}"
-                  onclick="event.stopPropagation(); openCoverPicker(decodeURIComponent('${encodeURIComponent(serie)}'))"
-                  title="${cover ? 'Cambiar portada' : 'Agregar portada'}">${cover ? '' : '🖼️'}</span>
-            <span class="series-title-wrap">${escapeHtml(serie)} <span class="badge">${items.length} ep.</span>
-            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeCover(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar portada">✕</span>` : ''}</span>
-          </div>
-          <div class="header-tags">
-            ${tagsHtml(groupGenre, groupType)}
-            ${groupSaga ? `<span class="saga-pill" title="Franquicia/saga">🎞️ ${escapeHtml(groupSaga)}</span>` : ''}
-            <span class="genre-edit-btn" onclick="event.stopPropagation(); openGenreModal('series', decodeURIComponent('${encodeURIComponent(serie)}'))" title="Editar género y tipo">🏷️✎</span>
-            ${isPlaying ? `<span class="music-playing-indicator"><span class="dot"></span>sonando</span>` : ''}
-            <span class="music-btn ${music ? 'has' : ''}"
-                  onclick="event.stopPropagation(); openMusicPicker(decodeURIComponent('${encodeURIComponent(serie)}'))"
-                  title="${music ? 'Cambiar música de la carpeta: ' + escapeHtml(music.name) : 'Elegir música para esta carpeta'}">🎵</span>
-            ${music ? `<span class="remove-music" onclick="event.stopPropagation(); removeFolderMusic(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar música">✕</span>` : ''}
-            <span class="goal-btn ${goal > 0 ? 'has' : ''}"
-                  onclick="event.stopPropagation(); setSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))"
-                  title="${goal > 0 ? 'Editar meta de capítulos (' + goal + ')' : 'Definir total de capítulos para ver el progreso'}">🎯</span>
-            <span class="link-btn ${isLinked ? 'has' : ''}"
-                  onclick="event.stopPropagation(); openTitleSearch('series', decodeURIComponent('${encodeURIComponent(serie)}'))"
-                  title="${isLinked ? 'Vinculada a ' + (seriesApiLink[seriesKey(serie)].source === 'jikan' ? 'Jikan/MAL' : 'TMDB') + ' — tocar para cambiar' : 'Vincular con Jikan/TMDB (no depende de que el nombre coincida)'}">🔗</span>
-            <button class="status-toggle ${st}" onclick="event.stopPropagation(); toggleStatus(decodeURIComponent('${encodeURIComponent(serie)}'))">${STATUS_LABELS[st]}</button>
-          </div>
-        </div>
-        ${progressBarHtml}
-        <div class="entries-collapse ${isOpen ? 'open' : ''}">
-          ${st === 'curso' ? `<button type="button" class="quick-log-btn" onclick="event.stopPropagation(); quickLogNextEpisode(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Registrar el siguiente episodio ahora mismo">▶ +1 episodio ahora</button>` : ''}
-          ${cards}
-        </div>
-      </div>`;
-  }).join('');
-
-  updateGlobalStats();
-}
-
-document.getElementById('fSearch').addEventListener('input', render);
-document.getElementById('fStatusFilter').addEventListener('change', render);
-document.getElementById('fGenreFilter').addEventListener('change', render);
-document.getElementById('fTypeFilter').addEventListener('change', render);
-document.getElementById('fSortFilter').addEventListener('change', render);
 
 /*SERIES: formulario principal*/
 function setRating(v){
@@ -5292,6 +4937,509 @@ async function deleteMovieEntry(id){
 }
 window.deleteMovieEntry = deleteMovieEntry;
 
+/*MOVIES: formulario principal*/
+function setMovieRating(v){
+  currentMovieRating = v;
+  document.querySelectorAll('#movieStarPicker button').forEach(btn => {
+    btn.classList.toggle('on', parseInt(btn.dataset.v) <= v);
+  });
+}
+document.getElementById('movieStarPicker').addEventListener('click', (e) => {
+  if(e.target.tagName === 'BUTTON') setMovieRating(parseInt(e.target.dataset.v));
+});
+document.getElementById('movieClearStar').addEventListener('click', () => setMovieRating(0));
+
+document.getElementById('mDateUnknown').addEventListener('change', (e) => {
+  document.getElementById('mFecha').disabled = e.target.checked;
+  document.getElementById('mHora').disabled = e.target.checked;
+});
+
+async function addMovieEntry(){
+  const title = document.getElementById('mTitle').value.trim();
+  const errEl = document.getElementById('movieErrMsg');
+  if(!title){ errEl.textContent = 'Escribe al menos el título de la película.'; errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+
+  const btn = document.getElementById('btnAddMovie');
+  btn.disabled = true;
+
+  const dateUnknown = document.getElementById('mDateUnknown').checked;
+  movieEntries.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2,7),
+    title,
+    date: dateUnknown ? '' : displayToIso(document.getElementById('mFecha').value),
+    time: dateUnknown ? '' : document.getElementById('mHora').value,
+    rating: currentMovieRating,
+    rewatch: document.getElementById('mRewatch').checked,
+    note: document.getElementById('mNota').value.trim()
+  });
+
+  const mKey = seriesKey(title);
+  const mGeneroVal = document.getElementById('mGenero').value;
+  const mTipoVal = document.getElementById('mTipo').value;
+  const mDuracionVal = parseInt(document.getElementById('mDuracion').value, 10);
+  const mFranquiciaVal = document.getElementById('mFranquicia').value;
+  if(mGeneroVal){ movieGenres[mKey] = movieGenres[mKey] || []; if(!movieGenres[mKey].includes(mGeneroVal)) movieGenres[mKey].push(mGeneroVal); }
+  if(mTipoVal) movieTypes[mKey] = mTipoVal;
+  if(mDuracionVal > 0) movieDuration[mKey] = mDuracionVal;
+  if(mFranquiciaVal && mFranquiciaVal !== '__new__' && franchises[mFranquiciaVal]) movieSagas[mKey] = mFranquiciaVal;
+  // Si la película se vinculó por búsqueda de TMDB y pertenece a una colección, la guardamos en
+  // la franquicia asignada — es mucho más confiable que buscar la colección por el nombre corto
+  // que le puso el usuario a la franquicia (ej. "UCM" no matchea "Marvel Cinematic Universe").
+  if(mFranquiciaVal && franchises[mFranquiciaVal] && pendingApiCollectionId){
+    franchises[mFranquiciaVal].tmdbCollectionId = pendingApiCollectionId;
+  }
+  // Géneros traídos de TMDB/Jikan (si se buscó el título antes de registrar)
+  if(pendingApiGenresMovie && pendingApiGenresMovie.length){
+    movieGenres[mKey] = movieGenres[mKey] || [];
+    pendingApiGenresMovie.forEach(g => { if(!movieGenres[mKey].includes(g)) movieGenres[mKey].push(g); });
+  }
+  pendingApiGenresMovie = null;
+  pendingApiCollectionId = null;
+  pendingApiCollectionName = null;
+
+  renderMovies();
+  await saveAll();
+
+  document.getElementById('mTitle').value = '';
+  document.getElementById('mNota').value = '';
+  document.getElementById('mGenero').value = '';
+  document.getElementById('mTipo').value = '';
+  document.getElementById('mDuracion').value = '';
+  document.getElementById('mFranquicia').value = '';
+  document.getElementById('mDateUnknown').checked = false;
+  document.getElementById('mFecha').disabled = false;
+  document.getElementById('mHora').disabled = false;
+  document.getElementById('mRewatch').checked = false;
+  setMovieRating(0);
+  nowDefaults('m');
+  document.getElementById('mTitle').focus();
+  btn.disabled = false;
+}
+document.getElementById('btnAddMovie').addEventListener('click', addMovieEntry);
+
+/*MOVIES: pendientes*/
+function renderMoviePending(){
+  document.getElementById('moviePendingCount').textContent = moviePending.length;
+  const wrap = document.getElementById('moviePendingList');
+  if(moviePending.length === 0){
+    wrap.innerHTML = `<div class="pending-empty">No tienes películas pendientes todavía. Agrega alguna arriba.</div>`;
+    return;
+  }
+  wrap.innerHTML = moviePending.map(p => {
+    const age = timeAgo(p.addedAt);
+    return `
+    <div class="pending-item">
+      <div class="pending-info">
+        <div class="pending-name">📌 ${escapeHtml(p.title)}</div>
+        ${p.note ? `<div class="pending-note">"${escapeHtml(p.note)}"</div>` : ''}
+        ${age ? `<div class="pending-age ${age.stale ? 'stale' : ''}">${age.stale ? '⏳ ' : ''}${age.text}</div>` : ''}
+      </div>
+      <div class="pending-actions">
+        <button class="btn-mini start" onclick="startWatchingMoviePending('${p.id}')" title="Ya la vi">🎬 Ya la vi</button>
+        <button class="del-btn" onclick="removeMoviePending('${p.id}')" title="Quitar de pendientes">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function removeMoviePending(id){
+  const idx = moviePending.findIndex(p => p.id === id);
+  if(idx === -1) return;
+  const removed = moviePending[idx];
+  moviePending.splice(idx, 1);
+  renderMoviePending();
+  await saveAll();
+  showUndoToast('Quitada de pendientes.', async () => {
+    moviePending.splice(idx, 0, removed);
+    renderMoviePending();
+    await saveAll();
+  });
+}
+async function startWatchingMoviePending(id){
+  const p = moviePending.find(x => x.id === id);
+  if(!p) return;
+  moviePending = moviePending.filter(x => x.id !== id);
+  renderMoviePending();
+  await saveAll();
+  switchMovieSub('log');
+  document.getElementById('mTitle').value = p.title;
+  document.getElementById('mTitle').scrollIntoView({behavior:'smooth', block:'center'});
+  document.getElementById('mTitle').focus();
+}
+window.removeMoviePending = removeMoviePending;
+window.startWatchingMoviePending = startWatchingMoviePending;
+
+document.getElementById('btnAddMoviePending').addEventListener('click', async () => {
+  const nameInput = document.getElementById('pmName');
+  const noteInput = document.getElementById('pmNote');
+  const title = nameInput.value.trim();
+  if(!title) return;
+  moviePending.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,7), title, note: noteInput.value.trim(), addedAt: Date.now() });
+  nameInput.value = ''; noteInput.value = '';
+  renderMoviePending();
+  await saveAll();
+  nameInput.focus();
+});
+
+/*BÚSQUEDA GLOBAL (series + películas, desde cualquier pestaña)*/
+let globalSearchMatches = [];
+
+function buildGlobalSearchIndex(){
+  const items = [];
+
+  const seriesNames = [...new Set(entries.map(e => e.serie.trim()))];
+  seriesNames.forEach(name => {
+    const key = seriesKey(name);
+    const count = entries.filter(e => seriesKey(e.serie) === key).length;
+    items.push({
+      kind: 'series',
+      groupName: name,
+      matchNames: [name],
+      cover: covers[key] || null,
+      badge: `${count} ${count === 1 ? 'episodio' : 'episodios'}`,
+      extra: STATUS_LABELS[getStatus(name)] || ''
+    });
+  });
+
+  const { groups, order } = groupMovieEntries(movieEntries);
+  order.forEach(groupKey => {
+    const g = groups[groupKey];
+    const dispKey = seriesKey(g.displayName);
+    const matchNames = g.isFranchise ? [g.displayName, ...g.items.map(e => e.title.trim())] : [g.displayName];
+    const distinctTitles = new Set(g.items.map(e => seriesKey(e.title))).size;
+    items.push({
+      kind: 'movie',
+      groupName: g.displayName,
+      matchNames,
+      cover: movieCovers[dispKey] || null,
+      badge: g.isFranchise ? `${distinctTitles} películas` : `${g.items.length} ${g.items.length === 1 ? 'visionado' : 'visionados'}`,
+      extra: g.isFranchise ? '🎞️ Franquicia' : ''
+    });
+  });
+
+  return items;
+}
+
+function openGlobalSearch(){
+  document.getElementById('globalSearchInput').value = '';
+  document.getElementById('globalSearchResults').innerHTML = '';
+  document.getElementById('globalSearchEmptyMsg').textContent = 'Escribí algo para buscar.';
+  document.getElementById('globalSearchEmptyMsg').style.display = 'block';
+  globalSearchMatches = [];
+  document.getElementById('globalSearchModalOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('globalSearchInput').focus(), 30);
+}
+function closeGlobalSearch(){
+  document.getElementById('globalSearchModalOverlay').style.display = 'none';
+}
+window.openGlobalSearch = openGlobalSearch;
+
+function runGlobalSearch(){
+  const query = document.getElementById('globalSearchInput').value.trim().toLowerCase();
+  const resultsEl = document.getElementById('globalSearchResults');
+  const emptyEl = document.getElementById('globalSearchEmptyMsg');
+
+  if(!query){
+    resultsEl.innerHTML = '';
+    globalSearchMatches = [];
+    emptyEl.textContent = 'Escribí algo para buscar.';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  const index = buildGlobalSearchIndex();
+  globalSearchMatches = index.filter(item => item.matchNames.some(n => n.toLowerCase().includes(query)));
+
+  if(!globalSearchMatches.length){
+    resultsEl.innerHTML = '';
+    emptyEl.textContent = 'Sin resultados.';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  resultsEl.innerHTML = globalSearchMatches.map((item, i) => `
+    <div class="title-search-result" onclick="goToGlobalSearchResult(${i})">
+      <div class="title-search-result-cover" style="${item.cover ? `background-image:url('${item.cover}')` : ''}">${item.cover ? '' : (item.kind === 'series' ? '📺' : '🎬')}</div>
+      <div class="title-search-result-info">
+        <div class="title-search-result-name">${escapeHtml(item.groupName)}</div>
+        <div class="title-search-result-sub">${item.kind === 'series' ? '📺 Serie' : '🎬 Película'} · ${escapeHtml(item.badge)}${item.extra ? ' · ' + escapeHtml(item.extra) : ''}</div>
+      </div>
+    </div>`).join('');
+}
+window.runGlobalSearch = runGlobalSearch;
+
+function goToGlobalSearchResult(idx){
+  const item = globalSearchMatches[idx];
+  if(!item) return;
+  closeGlobalSearch();
+  const key = seriesKey(item.groupName);
+
+  if(item.kind === 'series'){
+    switchMainTab('series');
+    switchSeriesSub('log');
+    if(!expandedSeries.has(key)){
+      expandedSeries.add(key);
+      playFolderMusic('series:' + key, (folderMusic[key] || {}).dataUrl);
+    }
+    render();
+  } else {
+    switchMainTab('peliculas');
+    switchMovieSub('log');
+    if(!expandedMovies.has(key)){
+      expandedMovies.add(key);
+      playFolderMusic('movie:' + key, (movieFolderMusic[key] || {}).dataUrl);
+    }
+    renderMovies();
+  }
+
+  setTimeout(() => {
+    const el = document.querySelector(`.series-group[data-group-key="${CSS.escape(key)}"]`);
+    if(el) el.scrollIntoView({ behavior:'smooth', block:'center' });
+  }, 80);
+}
+window.goToGlobalSearchResult = goToGlobalSearchResult;
+
+document.getElementById('globalSearchFab').addEventListener('click', openGlobalSearch);
+document.getElementById('globalSearchModalClose').addEventListener('click', closeGlobalSearch);
+document.getElementById('globalSearchModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'globalSearchModalOverlay') closeGlobalSearch();
+});
+document.getElementById('globalSearchInput').addEventListener('input', runGlobalSearch);
+
+function renderTimeCapsulePanel(){
+  const panel = document.getElementById('timeCapsulePanel');
+  const list = document.getElementById('timeCapsuleList');
+
+  const today = new Date();
+  const todayMonth = pad(today.getMonth() + 1);
+  const todayDay = pad(today.getDate());
+  const currentYear = today.getFullYear();
+
+  const items = [];
+
+  entries.forEach(e => {
+    if(!e.date) return;
+    const [y, m, d] = e.date.split('-');
+    if(m !== todayMonth || d !== todayDay) return;
+    const yearsAgo = currentYear - parseInt(y, 10);
+    if(yearsAgo <= 0) return;
+    const tParts = [];
+    if(e.season !== '' && e.season != null) tParts.push(`T${pad(e.season)}`);
+    if(e.episode !== '' && e.episode != null) tParts.push(`E${pad(e.episode)}`);
+    const tag = tParts.length ? ` (${tParts.join(' ')})` : '';
+    items.push({
+      icon: '📺',
+      html: `Viste${tag} de <b>${escapeHtml(e.serie)}</b>`,
+      yearsAgo
+    });
+  });
+
+  movieEntries.forEach(e => {
+    if(!e.date) return;
+    const [y, m, d] = e.date.split('-');
+    if(m !== todayMonth || d !== todayDay) return;
+    const yearsAgo = currentYear - parseInt(y, 10);
+    if(yearsAgo <= 0) return;
+    items.push({
+      icon: '🎬',
+      html: `Viste <b>${escapeHtml(e.title)}</b>`,
+      yearsAgo
+    });
+  });
+
+  if(!items.length){ panel.style.display = 'none'; return; }
+
+  items.sort((a, b) => a.yearsAgo - b.yearsAgo);
+  panel.style.display = 'block';
+  list.innerHTML = items.slice(0, 20).map(it => `
+    <div class="upcoming-row">
+      <span class="upcoming-icon">${it.icon}</span>
+      <span class="upcoming-text">${it.html}</span>
+      <span class="upcoming-date">hace ${it.yearsAgo} ${it.yearsAgo === 1 ? 'año' : 'años'}</span>
+    </div>`).join('');
+}
+
+function render(){
+  renderContinueWatching();
+  renderTimeCapsulePanel();
+  updateSerieList();
+  const container = document.getElementById('logContainer');
+  const search = document.getElementById('fSearch').value.trim().toLowerCase();
+  const statusFilter = document.getElementById('fStatusFilter').value;
+
+  if(entries.length === 0){
+    container.innerHTML = `<div class="empty-state"><span class="big">Cinta vacía</span>Todavía no hay episodios registrados.<br>Registra el primero arriba.</div>`;
+    updateGlobalStats();
+    return;
+  }
+
+  const genreFilter = document.getElementById('fGenreFilter').value;
+  const typeFilter = document.getElementById('fTypeFilter').value;
+
+  const sortedAll = [...entries].sort((a,b) => sortKeyOf(b) - sortKeyOf(a));
+  let filtered = sortedAll.filter(e => {
+    if(search && !e.serie.toLowerCase().includes(search)) return false;
+    if(statusFilter !== 'todas' && getStatus(e.serie) !== statusFilter) return false;
+    if(genreFilter !== 'todos' && !getGenreList(e.serie).includes(genreFilter)) return false;
+    if(typeFilter !== 'todos' && getType(e.serie) !== typeFilter) return false;
+    return true;
+  });
+
+  if(filtered.length === 0){
+    container.innerHTML = `<div class="empty-state"><span class="big">Sin resultados</span>No hay episodios que coincidan con el filtro actual.</div>`;
+    updateGlobalStats();
+    return;
+  }
+
+  const groups = {}; const order = [];
+  filtered.forEach(e => {
+    const key = e.serie.trim();
+    if(!groups[key]){ groups[key] = []; order.push(key); }
+    groups[key].push(e);
+  });
+
+  const sortMode = document.getElementById('fSortFilter').value;
+  if(sortMode === 'nombre'){
+    order.sort((a,b) => a.localeCompare(b, 'es', {sensitivity:'base'}));
+  } else if(sortMode === 'calificacion'){
+    order.sort((a,b) => avgRatingOf(groups[b]) - avgRatingOf(groups[a]));
+  }
+  // 'reciente' ya queda resuelto por el orden natural de `filtered` (más reciente primero)
+
+  container.innerHTML = order.map(serie => {
+    const items = groups[serie].sort((a, b) => {
+      const sa = isNaN(parseInt(a.season,10)) ? 0 : parseInt(a.season,10);
+      const sb = isNaN(parseInt(b.season,10)) ? 0 : parseInt(b.season,10);
+      if(sa !== sb) return sa - sb;
+      const ea = isNaN(parseInt(a.episode,10)) ? 0 : parseInt(a.episode,10);
+      const eb = isNaN(parseInt(b.episode,10)) ? 0 : parseInt(b.episode,10);
+      return ea - eb;
+    });
+    const st = getStatus(serie);
+    const isOpen = expandedSeries.has(seriesKey(serie));
+    const cover = covers[seriesKey(serie)] || null;
+
+    const cards = items.map(e => {
+      if(e.id === editingId){
+        const ratingOptions = [0,1,2,3,4,5].map(v =>
+          `<option value="${v}" ${e.rating == v ? 'selected' : ''}>${v === 0 ? 'Sin calif.' : '★'.repeat(v)}</option>`
+        ).join('');
+        return `
+          <div class="entry-card editing" data-id="${e.id}">
+            <div class="edit-grid">
+              <div class="edit-field"><label>Temporada</label><input type="number" min="0" class="edit-season" value="${e.season ?? ''}"></div>
+              <div class="edit-field"><label>Capítulo</label><input type="number" min="0" class="edit-episode" value="${e.episode ?? ''}"></div>
+              <div class="edit-field"><label>Fecha</label><input type="text" class="edit-date" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" oninput="maskDateInput(this)" value="${e.date ? isoToDisplay(e.date) : ''}" ${!e.date ? 'disabled' : ''}></div>
+              <div class="edit-field"><label>Hora</label><input type="time" class="edit-time" value="${e.time || ''}" ${!e.date ? 'disabled' : ''}></div>
+            </div>
+            <label class="checkbox-row-inline edit-line">
+              <input type="checkbox" class="edit-date-unknown" ${!e.date ? 'checked' : ''}
+                onchange="const c=this.closest('.entry-card'); c.querySelector('.edit-date').disabled=this.checked; c.querySelector('.edit-time').disabled=this.checked;">
+              No recuerdo la fecha/hora exacta
+            </label>
+            <div class="edit-field full"><label>Calificación</label><select class="edit-rating">${ratingOptions}</select></div>
+            <label class="checkbox-row-inline edit-line"><input type="checkbox" class="edit-rewatch" ${e.rewatch ? 'checked' : ''}> 🔁 Es un rewatch</label>
+            <div class="edit-field full"><label>Nota</label><textarea class="edit-note">${escapeHtml(e.note || '')}</textarea></div>
+            <div class="edit-actions">
+              <button class="btn-mini save" onclick="saveEdit('${e.id}')">✔ Guardar</button>
+              <button class="btn-mini" onclick="cancelEdit()">✕ Cancelar</button>
+            </div>
+          </div>`;
+      }
+      const tParts = [];
+      if(e.season !== '' && e.season != null) tParts.push(`T${pad(e.season)}`);
+      if(e.episode !== '' && e.episode != null) tParts.push(`E${pad(e.episode)}`);
+      const tag = tParts.length ? tParts.join(' ') : 'Sin especificar';
+      const stars = starString(e.rating);
+      const isSelected = bulkSelectedIds.has(e.id);
+      return `
+        <div class="entry-card ${isSelected ? 'bulk-selected' : ''}" data-id="${e.id}">
+          <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+            ${bulkEditMode ? `<input type="checkbox" class="entry-select-box" ${isSelected ? 'checked' : ''} onchange="toggleEntrySelection('${e.id}', this.closest('.entry-card'))">` : ''}
+            <div class="entry-left">
+              <div class="entry-tag-row">
+                <span class="entry-tag">${tag}</span>
+                ${stars ? `<span class="entry-stars">${stars}</span>` : ''}
+                ${e.rewatch ? `<span class="entry-rewatch">🔁 rewatch</span>` : ''}
+              </div>
+              <div class="entry-time">${fmtDate(e.date, e.time)}</div>
+              ${e.note ? `<div class="entry-note">"${escapeHtml(e.note)}"</div>` : ''}
+            </div>
+          </div>
+          <div class="entry-actions">
+            <button class="del-btn" onclick="startEdit('${e.id}')" title="Editar">✎</button>
+            <button class="del-btn" onclick="deleteEntry('${e.id}')" title="Eliminar registro">✕</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    const groupGenre = getGenre(serie);
+    const groupType = getType(serie);
+    const groupSaga = sagas[seriesKey(serie)] || '';
+    const music = folderMusic[seriesKey(serie)] || null;
+    const isPlaying = currentAudioKey === 'series:' + seriesKey(serie);
+
+    const goal = getSeriesGoal(serie);
+    const watchedSet = new Set(items.map(e => `${e.season ?? ''}|${e.episode ?? ''}`));
+    const watchedCount = watchedSet.size;
+    const pct = goal > 0 ? Math.min(100, Math.round((watchedCount / goal) * 100)) : 0;
+    const isLinked = !!seriesApiLink[seriesKey(serie)];
+    const progressBarHtml = goal > 0 ? `
+        <div class="progress-row">
+          <div class="progress-track ${pct >= 100 ? 'complete' : ''}"><div class="progress-mask" style="width:${100 - pct}%"></div></div>
+          <span class="progress-label">${watchedCount}/${goal} · ${pct}%</span>
+          <button type="button" class="progress-goal-btn" onclick="setSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Editar meta de capítulos">editar meta</button>
+          ${isLinked ? `<button type="button" class="progress-refresh-btn" onclick="refreshSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Consultar ahora si hay un total nuevo (Jikan/TMDB)">🔄</button>` : ''}
+        </div>` : '';
+
+    return `
+      <div class="series-group" data-group-key="${seriesKey(serie)}">
+        <div class="series-header" onclick="toggleExpand(decodeURIComponent('${encodeURIComponent(serie)}'))">
+          <div class="series-name">
+            <span class="series-chevron ${isOpen ? 'open' : ''}">▸</span>
+            <span class="series-cover ${cover ? '' : 'empty'}"
+                  style="${cover ? `background-image:url('${cover}')` : ''}"
+                  onclick="event.stopPropagation(); openCoverPicker(decodeURIComponent('${encodeURIComponent(serie)}'))"
+                  title="${cover ? 'Cambiar portada' : 'Agregar portada'}">${cover ? '' : '🖼️'}</span>
+            <span class="series-title-wrap">${escapeHtml(serie)} <span class="badge">${items.length} ep.</span>
+            ${cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeCover(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar portada">✕</span>` : ''}</span>
+          </div>
+          <div class="header-tags">
+            ${tagsHtml(groupGenre, groupType)}
+            ${groupSaga ? `<span class="saga-pill" title="Franquicia/saga">🎞️ ${escapeHtml(groupSaga)}</span>` : ''}
+            <span class="genre-edit-btn" onclick="event.stopPropagation(); openGenreModal('series', decodeURIComponent('${encodeURIComponent(serie)}'))" title="Editar género y tipo">🏷️✎</span>
+            ${isPlaying ? `<span class="music-playing-indicator"><span class="dot"></span>sonando</span>` : ''}
+            <span class="music-btn ${music ? 'has' : ''}"
+                  onclick="event.stopPropagation(); openMusicPicker(decodeURIComponent('${encodeURIComponent(serie)}'))"
+                  title="${music ? 'Cambiar música de la carpeta: ' + escapeHtml(music.name) : 'Elegir música para esta carpeta'}">🎵</span>
+            ${music ? `<span class="remove-music" onclick="event.stopPropagation(); removeFolderMusic(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Quitar música">✕</span>` : ''}
+            <span class="goal-btn ${goal > 0 ? 'has' : ''}"
+                  onclick="event.stopPropagation(); setSeriesGoal(decodeURIComponent('${encodeURIComponent(serie)}'))"
+                  title="${goal > 0 ? 'Editar meta de capítulos (' + goal + ')' : 'Definir total de capítulos para ver el progreso'}">🎯</span>
+            <span class="link-btn ${isLinked ? 'has' : ''}"
+                  onclick="event.stopPropagation(); openTitleSearch('series', decodeURIComponent('${encodeURIComponent(serie)}'))"
+                  title="${isLinked ? 'Vinculada a ' + (seriesApiLink[seriesKey(serie)].source === 'jikan' ? 'Jikan/MAL' : 'TMDB') + ' — tocar para cambiar' : 'Vincular con Jikan/TMDB (no depende de que el nombre coincida)'}">🔗</span>
+            <button class="status-toggle ${st}" onclick="event.stopPropagation(); toggleStatus(decodeURIComponent('${encodeURIComponent(serie)}'))">${STATUS_LABELS[st]}</button>
+          </div>
+        </div>
+        ${progressBarHtml}
+        <div class="entries-collapse ${isOpen ? 'open' : ''}">
+          ${st === 'curso' ? `<button type="button" class="quick-log-btn" onclick="event.stopPropagation(); quickLogNextEpisode(decodeURIComponent('${encodeURIComponent(serie)}'))" title="Registrar el siguiente episodio ahora mismo">▶ +1 episodio ahora</button>` : ''}
+          ${cards}
+        </div>
+      </div>`;
+  }).join('');
+
+  updateGlobalStats();
+}
+
+document.getElementById('fSearch').addEventListener('input', render);
+document.getElementById('fStatusFilter').addEventListener('change', render);
+document.getElementById('fGenreFilter').addEventListener('change', render);
+document.getElementById('fTypeFilter').addEventListener('change', render);
+document.getElementById('fSortFilter').addEventListener('change', render);
+
 /*PAPELERA*/
 function daysLeftInTrash(item){
   const expiresAt = item.deletedAt + 15 * 86400000;
@@ -5576,148 +5724,83 @@ document.getElementById('mGenreFilter').addEventListener('change', renderMovies)
 document.getElementById('mTypeFilter').addEventListener('change', renderMovies);
 document.getElementById('mSortFilter').addEventListener('change', renderMovies);
 
-/*MOVIES: formulario principal*/
-function setMovieRating(v){
-  currentMovieRating = v;
-  document.querySelectorAll('#movieStarPicker button').forEach(btn => {
-    btn.classList.toggle('on', parseInt(btn.dataset.v) <= v);
-  });
-}
-document.getElementById('movieStarPicker').addEventListener('click', (e) => {
-  if(e.target.tagName === 'BUTTON') setMovieRating(parseInt(e.target.dataset.v));
-});
-document.getElementById('movieClearStar').addEventListener('click', () => setMovieRating(0));
+/*FRANQUICIAS (solo películas)*/
+function getFranchiseKey(title){ return movieSagas[seriesKey(title)] || null; }
+function getFranchiseName(fKey){ return (franchises[fKey] && franchises[fKey].name) || fKey; }
 
-document.getElementById('mDateUnknown').addEventListener('change', (e) => {
-  document.getElementById('mFecha').disabled = e.target.checked;
-  document.getElementById('mHora').disabled = e.target.checked;
-});
-
-async function addMovieEntry(){
-  const title = document.getElementById('mTitle').value.trim();
-  const errEl = document.getElementById('movieErrMsg');
-  if(!title){ errEl.textContent = 'Escribe al menos el título de la película.'; errEl.style.display = 'block'; return; }
-  errEl.style.display = 'none';
-
-  const btn = document.getElementById('btnAddMovie');
-  btn.disabled = true;
-
-  const dateUnknown = document.getElementById('mDateUnknown').checked;
-  movieEntries.push({
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2,7),
-    title,
-    date: dateUnknown ? '' : displayToIso(document.getElementById('mFecha').value),
-    time: dateUnknown ? '' : document.getElementById('mHora').value,
-    rating: currentMovieRating,
-    rewatch: document.getElementById('mRewatch').checked,
-    note: document.getElementById('mNota').value.trim()
-  });
-
-  const mKey = seriesKey(title);
-  const mGeneroVal = document.getElementById('mGenero').value;
-  const mTipoVal = document.getElementById('mTipo').value;
-  const mDuracionVal = parseInt(document.getElementById('mDuracion').value, 10);
-  const mFranquiciaVal = document.getElementById('mFranquicia').value;
-  if(mGeneroVal){ movieGenres[mKey] = movieGenres[mKey] || []; if(!movieGenres[mKey].includes(mGeneroVal)) movieGenres[mKey].push(mGeneroVal); }
-  if(mTipoVal) movieTypes[mKey] = mTipoVal;
-  if(mDuracionVal > 0) movieDuration[mKey] = mDuracionVal;
-  if(mFranquiciaVal && mFranquiciaVal !== '__new__' && franchises[mFranquiciaVal]) movieSagas[mKey] = mFranquiciaVal;
-  // Si la película se vinculó por búsqueda de TMDB y pertenece a una colección, la guardamos en
-  // la franquicia asignada — es mucho más confiable que buscar la colección por el nombre corto
-  // que le puso el usuario a la franquicia (ej. "UCM" no matchea "Marvel Cinematic Universe").
-  if(mFranquiciaVal && franchises[mFranquiciaVal] && pendingApiCollectionId){
-    franchises[mFranquiciaVal].tmdbCollectionId = pendingApiCollectionId;
+function populateFranchiseSelects(){
+  const names = Object.keys(franchises).sort((a,b) => getFranchiseName(a).localeCompare(getFranchiseName(b), 'es', {sensitivity:'base'}));
+  const opts = '<option value="">Ninguna</option>'
+    + names.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(getFranchiseName(k))} (meta: ${franchises[k].goal})</option>`).join('')
+    + '<option value="__new__">✚ Crear nueva franquicia...</option>';
+  const sel = document.getElementById('mFranquicia');
+  if(sel){
+    const prev = sel.value;
+    sel.innerHTML = opts;
+    if(names.includes(prev)) sel.value = prev;
   }
-  // Géneros traídos de TMDB/Jikan (si se buscó el título antes de registrar)
-  if(pendingApiGenresMovie && pendingApiGenresMovie.length){
-    movieGenres[mKey] = movieGenres[mKey] || [];
-    pendingApiGenresMovie.forEach(g => { if(!movieGenres[mKey].includes(g)) movieGenres[mKey].push(g); });
-  }
-  pendingApiGenresMovie = null;
-  pendingApiCollectionId = null;
-  pendingApiCollectionName = null;
-
-  renderMovies();
-  await saveAll();
-
-  document.getElementById('mTitle').value = '';
-  document.getElementById('mNota').value = '';
-  document.getElementById('mGenero').value = '';
-  document.getElementById('mTipo').value = '';
-  document.getElementById('mDuracion').value = '';
-  document.getElementById('mFranquicia').value = '';
-  document.getElementById('mDateUnknown').checked = false;
-  document.getElementById('mFecha').disabled = false;
-  document.getElementById('mHora').disabled = false;
-  document.getElementById('mRewatch').checked = false;
-  setMovieRating(0);
-  nowDefaults('m');
-  document.getElementById('mTitle').focus();
-  btn.disabled = false;
 }
-document.getElementById('btnAddMovie').addEventListener('click', addMovieEntry);
 
-/*MOVIES: pendientes*/
-function renderMoviePending(){
-  document.getElementById('moviePendingCount').textContent = moviePending.length;
-  const wrap = document.getElementById('moviePendingList');
-  if(moviePending.length === 0){
-    wrap.innerHTML = `<div class="pending-empty">No tienes películas pendientes todavía. Agrega alguna arriba.</div>`;
+let franchiseModalPrevValue = '';
+function openCreateFranchiseModal(){
+  franchiseModalPrevValue = '';
+  document.getElementById('franchiseModalName').value = '';
+  document.getElementById('franchiseModalGoal').value = '';
+  document.getElementById('franchiseModalErr').style.display = 'none';
+  document.getElementById('franchiseModalOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('franchiseModalName').focus(), 30);
+}
+function closeCreateFranchiseModal(){
+  document.getElementById('franchiseModalOverlay').style.display = 'none';
+  const sel = document.getElementById('mFranquicia');
+  if(sel && sel.value === '__new__') sel.value = franchiseModalPrevValue || '';
+}
+async function saveCreateFranchiseModal(){
+  const name = document.getElementById('franchiseModalName').value.trim();
+  const goal = parseInt(document.getElementById('franchiseModalGoal').value, 10);
+  const errEl = document.getElementById('franchiseModalErr');
+  if(!name || !(goal > 0)){
+    errEl.textContent = 'Escribí un nombre y la cantidad total de películas.';
+    errEl.style.display = 'block';
     return;
   }
-  wrap.innerHTML = moviePending.map(p => {
-    const age = timeAgo(p.addedAt);
-    return `
-    <div class="pending-item">
-      <div class="pending-info">
-        <div class="pending-name">📌 ${escapeHtml(p.title)}</div>
-        ${p.note ? `<div class="pending-note">"${escapeHtml(p.note)}"</div>` : ''}
-        ${age ? `<div class="pending-age ${age.stale ? 'stale' : ''}">${age.stale ? '⏳ ' : ''}${age.text}</div>` : ''}
-      </div>
-      <div class="pending-actions">
-        <button class="btn-mini start" onclick="startWatchingMoviePending('${p.id}')" title="Ya la vi">🎬 Ya la vi</button>
-        <button class="del-btn" onclick="removeMoviePending('${p.id}')" title="Quitar de pendientes">✕</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-async function removeMoviePending(id){
-  const idx = moviePending.findIndex(p => p.id === id);
-  if(idx === -1) return;
-  const removed = moviePending[idx];
-  moviePending.splice(idx, 1);
-  renderMoviePending();
+  const fKey = seriesKey(name);
+  if(franchises[fKey]){
+    errEl.textContent = 'Ya existe una franquicia con ese nombre.';
+    errEl.style.display = 'block';
+    return;
+  }
+  franchises[fKey] = { name, goal };
+  populateFranchiseSelects();
+  const sel = document.getElementById('mFranquicia');
+  if(sel) sel.value = fKey;
+  document.getElementById('franchiseModalOverlay').style.display = 'none';
+  renderMovies();
   await saveAll();
-  showUndoToast('Quitada de pendientes.', async () => {
-    moviePending.splice(idx, 0, removed);
-    renderMoviePending();
-    await saveAll();
-  });
 }
-async function startWatchingMoviePending(id){
-  const p = moviePending.find(x => x.id === id);
-  if(!p) return;
-  moviePending = moviePending.filter(x => x.id !== id);
-  renderMoviePending();
+async function setFranchiseGoal(fKey){
+  const current = franchises[fKey] ? franchises[fKey].goal : 0;
+  const input = await customPrompt(`¿Cuántas películas tiene en total la franquicia "${getFranchiseName(fKey)}"?`, current || '', { icon:'🎯', title:'Meta de la franquicia', okText:'Guardar' });
+  if(input === null) return; // cancelado
+  const n = parseInt(input, 10);
+  if(!(n > 0)) return;
+  if(!franchises[fKey]) franchises[fKey] = { name:getFranchiseName(fKey), goal:n };
+  else franchises[fKey].goal = n;
+  renderMovies();
   await saveAll();
-  switchMovieSub('log');
-  document.getElementById('mTitle').value = p.title;
-  document.getElementById('mTitle').scrollIntoView({behavior:'smooth', block:'center'});
-  document.getElementById('mTitle').focus();
 }
-window.removeMoviePending = removeMoviePending;
-window.startWatchingMoviePending = startWatchingMoviePending;
+window.setFranchiseGoal = setFranchiseGoal;
 
-document.getElementById('btnAddMoviePending').addEventListener('click', async () => {
-  const nameInput = document.getElementById('pmName');
-  const noteInput = document.getElementById('pmNote');
-  const title = nameInput.value.trim();
-  if(!title) return;
-  moviePending.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,7), title, note: noteInput.value.trim(), addedAt: Date.now() });
-  nameInput.value = ''; noteInput.value = '';
-  renderMoviePending();
-  await saveAll();
-  nameInput.focus();
+document.getElementById('mFranquicia').addEventListener('change', (e) => {
+  if(e.target.value === '__new__'){
+    franchiseModalPrevValue = '';
+    openCreateFranchiseModal();
+  }
+});
+document.getElementById('franchiseModalClose').addEventListener('click', closeCreateFranchiseModal);
+document.getElementById('franchiseModalSave').addEventListener('click', saveCreateFranchiseModal);
+document.getElementById('franchiseModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'franchiseModalOverlay') closeCreateFranchiseModal();
 });
 
 /*RANKINGS*/
@@ -6295,155 +6378,6 @@ function renderActivityDetail(dateStr, items){
 document.getElementById('activityPrevYear').addEventListener('click', () => { activityYear--; activitySelectedDate = null; renderActivity(); });
 document.getElementById('activityNextYear').addEventListener('click', () => { activityYear++; activitySelectedDate = null; renderActivity(); });
 
-/*MODAL: editar género / tipo*/
-let genreModalTarget = null; // { type:'series'|'movie', name: string }
-
-function openGenreModal(type, name){
-  genreModalTarget = { type, name };
-  const currentGenres = type === 'series' ? getGenreList(name) : getMovieGenreList(name);
-  const currentType = type === 'series' ? getType(name) : getMovieType(name);
-  const currentDuration = type === 'series' ? (seriesDuration[seriesKey(name)] || '') : (movieDuration[seriesKey(name)] || '');
-  const currentSaga = sagas[seriesKey(name)] || '';
-
-  document.getElementById('genreModalTitle').textContent = `Género y tipo — ${name}`;
-  document.getElementById('genreCheckGrid').innerHTML = GENRES.map(g => `
-    <label class="genre-check-pill ${currentGenres.includes(g) ? 'checked' : ''}">
-      <input type="checkbox" value="${escapeHtml(g)}" ${currentGenres.includes(g) ? 'checked' : ''}
-        onchange="this.closest('label').classList.toggle('checked', this.checked)">
-      ${escapeHtml(g)}
-    </label>`).join('');
-  document.getElementById('genreModalType').value = currentType || '';
-  document.getElementById('genreModalDurationLabel').textContent = type === 'series' ? 'Duración por episodio (min)' : 'Duración de la película (min)';
-  document.getElementById('genreModalDuration').value = currentDuration;
-  // La saga/franquicia de películas ahora se maneja con el sistema de franquicias (meta editable),
-  // así que este campo libre solo aplica a series.
-  document.getElementById('genreModalSagaRow').style.display = type === 'series' ? 'flex' : 'none';
-  if(type === 'series'){
-    populateSagaList();
-    document.getElementById('genreModalSaga').value = currentSaga;
-  }
-  document.getElementById('genreModalOverlay').style.display = 'flex';
-}
-
-function closeGenreModal(){
-  document.getElementById('genreModalOverlay').style.display = 'none';
-  genreModalTarget = null;
-}
-
-async function saveGenreModal(){
-  if(!genreModalTarget) return;
-  const { type, name } = genreModalTarget;
-  const key = seriesKey(name);
-  const selected = [...document.querySelectorAll('#genreCheckGrid input:checked')].map(i => i.value);
-  const typeVal = document.getElementById('genreModalType').value;
-  const durationVal = parseInt(document.getElementById('genreModalDuration').value, 10);
-
-  if(type === 'series'){
-    const sagaVal = document.getElementById('genreModalSaga').value.trim();
-    if(selected.length) genres[key] = selected; else delete genres[key];
-    if(typeVal) types[key] = typeVal; else delete types[key];
-    if(durationVal > 0) seriesDuration[key] = durationVal; else delete seriesDuration[key];
-    if(sagaVal) sagas[key] = sagaVal; else delete sagas[key];
-    populateSagaList();
-    render();
-  } else {
-    if(selected.length) movieGenres[key] = selected; else delete movieGenres[key];
-    if(typeVal) movieTypes[key] = typeVal; else delete movieTypes[key];
-    if(durationVal > 0) movieDuration[key] = durationVal; else delete movieDuration[key];
-    renderMovies();
-  }
-  closeGenreModal();
-  await saveAll();
-}
-
-window.openGenreModal = openGenreModal;
-window.closeGenreModal = closeGenreModal;
-
-document.getElementById('genreModalClose').addEventListener('click', closeGenreModal);
-document.getElementById('genreModalSave').addEventListener('click', saveGenreModal);
-document.getElementById('genreModalOverlay').addEventListener('click', (e) => {
-  if(e.target.id === 'genreModalOverlay') closeGenreModal();
-});
-
-/*FRANQUICIAS (solo películas)*/
-function getFranchiseKey(title){ return movieSagas[seriesKey(title)] || null; }
-function getFranchiseName(fKey){ return (franchises[fKey] && franchises[fKey].name) || fKey; }
-
-function populateFranchiseSelects(){
-  const names = Object.keys(franchises).sort((a,b) => getFranchiseName(a).localeCompare(getFranchiseName(b), 'es', {sensitivity:'base'}));
-  const opts = '<option value="">Ninguna</option>'
-    + names.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(getFranchiseName(k))} (meta: ${franchises[k].goal})</option>`).join('')
-    + '<option value="__new__">✚ Crear nueva franquicia...</option>';
-  const sel = document.getElementById('mFranquicia');
-  if(sel){
-    const prev = sel.value;
-    sel.innerHTML = opts;
-    if(names.includes(prev)) sel.value = prev;
-  }
-}
-
-let franchiseModalPrevValue = '';
-function openCreateFranchiseModal(){
-  franchiseModalPrevValue = '';
-  document.getElementById('franchiseModalName').value = '';
-  document.getElementById('franchiseModalGoal').value = '';
-  document.getElementById('franchiseModalErr').style.display = 'none';
-  document.getElementById('franchiseModalOverlay').style.display = 'flex';
-  setTimeout(() => document.getElementById('franchiseModalName').focus(), 30);
-}
-function closeCreateFranchiseModal(){
-  document.getElementById('franchiseModalOverlay').style.display = 'none';
-  const sel = document.getElementById('mFranquicia');
-  if(sel && sel.value === '__new__') sel.value = franchiseModalPrevValue || '';
-}
-async function saveCreateFranchiseModal(){
-  const name = document.getElementById('franchiseModalName').value.trim();
-  const goal = parseInt(document.getElementById('franchiseModalGoal').value, 10);
-  const errEl = document.getElementById('franchiseModalErr');
-  if(!name || !(goal > 0)){
-    errEl.textContent = 'Escribí un nombre y la cantidad total de películas.';
-    errEl.style.display = 'block';
-    return;
-  }
-  const fKey = seriesKey(name);
-  if(franchises[fKey]){
-    errEl.textContent = 'Ya existe una franquicia con ese nombre.';
-    errEl.style.display = 'block';
-    return;
-  }
-  franchises[fKey] = { name, goal };
-  populateFranchiseSelects();
-  const sel = document.getElementById('mFranquicia');
-  if(sel) sel.value = fKey;
-  document.getElementById('franchiseModalOverlay').style.display = 'none';
-  renderMovies();
-  await saveAll();
-}
-async function setFranchiseGoal(fKey){
-  const current = franchises[fKey] ? franchises[fKey].goal : 0;
-  const input = await customPrompt(`¿Cuántas películas tiene en total la franquicia "${getFranchiseName(fKey)}"?`, current || '', { icon:'🎯', title:'Meta de la franquicia', okText:'Guardar' });
-  if(input === null) return; // cancelado
-  const n = parseInt(input, 10);
-  if(!(n > 0)) return;
-  if(!franchises[fKey]) franchises[fKey] = { name:getFranchiseName(fKey), goal:n };
-  else franchises[fKey].goal = n;
-  renderMovies();
-  await saveAll();
-}
-window.setFranchiseGoal = setFranchiseGoal;
-
-document.getElementById('mFranquicia').addEventListener('change', (e) => {
-  if(e.target.value === '__new__'){
-    franchiseModalPrevValue = '';
-    openCreateFranchiseModal();
-  }
-});
-document.getElementById('franchiseModalClose').addEventListener('click', closeCreateFranchiseModal);
-document.getElementById('franchiseModalSave').addEventListener('click', saveCreateFranchiseModal);
-document.getElementById('franchiseModalOverlay').addEventListener('click', (e) => {
-  if(e.target.id === 'franchiseModalOverlay') closeCreateFranchiseModal();
-});
-
 /*EDICIÓN EN BLOQUE*/
 let bulkEditMode = false;
 let bulkSelectedIds = new Set();
@@ -6842,6 +6776,63 @@ function buildComparisonSlides(year, currentStats){
   return slides;
 }
 
+// Frases random tipo "en ese tiempo también podrías haber..." para la slide de tiempo estimado.
+// Cuantas más horas, más probable que salga la de idioma. Si hay muy poco tiempo, avisa que
+// no alcanza ni para la actividad más rápida del pool.
+const WRAPPED_TIME_ACTIVITIES = [
+  { hoursPerUnit: 0.75, emoji:'🎧', singular:'escuchar un álbum completo', plural:(n) => `escuchar ${n} álbumes completos` },
+  { hoursPerUnit: 2,    emoji:'🍳', singular:'cocinar una comida elaborada de principio a fin', plural:(n) => `cocinar ${n} comidas elaboradas de principio a fin` },
+  { hoursPerUnit: 1.75, emoji:'💪', singular:'hacer una sesión de ejercicio', plural:(n) => `hacer ${n} sesiones de ejercicio` },
+  { hoursPerUnit: 8,    emoji:'😴', singular:'dormir una noche entera', plural:(n) => `dormir ${n} noches enteras` },
+  { hoursPerUnit: 6,    emoji:'📚', singular:'leer un libro de ~300 páginas', plural:(n) => `leer ${n} libros de ~300 páginas` },
+  { hoursPerUnit: 20,   emoji:'🎓', singular:'terminar un curso corto online', plural:(n) => `terminar ${n} cursos cortos online` },
+  { hoursPerUnit: 40,   emoji:'🎮', singular:'terminar la campaña de un videojuego largo', plural:(n) => `terminar ${n} campañas de videojuegos largos` }
+];
+function formatEquivCount(n){
+  return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
+}
+function getWrappedTimeEquivalence(totalHours){
+  const cheapest = WRAPPED_TIME_ACTIVITIES.reduce((a, b) => a.hoursPerUnit < b.hoursPerUnit ? a : b);
+  if(totalHours < cheapest.hoursPerUnit){
+    return `${cheapest.emoji} en ese tiempo no te da ni para ${cheapest.singular}`;
+  }
+
+  const candidates = WRAPPED_TIME_ACTIVITIES
+    .filter(a => totalHours >= a.hoursPerUnit)
+    .map(a => ({
+      weight: 1,
+      text: `${a.emoji} en ese tiempo podrías ${a.plural(formatEquivCount(totalHours / a.hoursPerUnit))}`
+    }));
+
+  // Idioma: nivel básico 100-300h (promedio 200), intermedio 500-750h (promedio 625).
+  // A partir de 200h la probabilidad de que salga este mensaje sube fuerte (66% en vez de ~1/n).
+  if(totalHours >= 100){
+    let langText, langWeight = 1;
+    if(totalHours >= 500){
+      langText = totalHours >= 625
+        ? '🗣️ en ese tiempo podrías haber llegado a un nivel intermedio de idioma'
+        : `🗣️ en ese tiempo podrías llevar cerca del ${Math.round((totalHours / 625) * 100)}% del camino a un nivel intermedio de idioma`;
+      langWeight = 4;
+    } else if(totalHours >= 200){
+      langText = '🗣️ en ese tiempo podrías haber aprendido un idioma a nivel básico';
+      langWeight = 4;
+    } else {
+      langText = `🗣️ en ese tiempo podrías llevar cerca del ${Math.round((totalHours / 200) * 100)}% del camino a un nivel básico de idioma`;
+      langWeight = 1;
+    }
+    candidates.push({ weight: langWeight, text: langText });
+  }
+
+  if(!candidates.length) return null;
+  const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
+  let r = Math.random() * totalWeight;
+  for(const c of candidates){
+    if(r < c.weight) return c.text;
+    r -= c.weight;
+  }
+  return candidates[candidates.length - 1].text;
+}
+
 function buildWrappedSlides(s, year){
   const slides = [];
   const yearLabel = year === 'all' ? 'todo tu historial' : `tu ${year}`;
@@ -6858,10 +6849,11 @@ function buildWrappedSlides(s, year){
 
   if(s.totalHours > 0){
     const days = s.totalHours / 24;
+    const equivalence = getWrappedTimeEquivalence(s.totalHours);
     slides.push({
       icon:'⏱️', eyebrow:'Tiempo estimado',
       big:`${s.totalHours >= 100 ? Math.round(s.totalHours) : s.totalHours.toFixed(1)} horas`,
-      sub:`le dedicaste a esto en ${yearLabel}${days >= 1 ? ` — como ${days.toFixed(1)} días seguidos sin dormir` : ''} (estimado según la duración promedio de cada tipo)`,
+      sub:`le dedicaste a esto en ${yearLabel}${days >= 1 ? ` — como ${days.toFixed(1)} días seguidos sin dormir` : ''} (más o menos).${equivalence ? ' ' + equivalence + '.' : ''}`,
       music:{ type:'random' },
       colorA:'#1a1f24', colorB:'#0e1216'
     });
