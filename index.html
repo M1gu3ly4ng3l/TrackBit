@@ -961,19 +961,34 @@ body{
   padding:3px 8px; cursor:pointer; opacity:0.7;
 }
 .arc-manage-btn:hover{ opacity:1; border-color:#4aa8e8; color:#4aa8e8; }
-.arc-group{
-  border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px;
-  background:rgba(255,255,255,0.02);
+.arc-grid{
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:10px;
 }
-.arc-header{
-  display:flex; align-items:center; gap:8px; cursor:pointer; flex-wrap:wrap;
+.arc-card{
+  cursor:pointer; text-align:center;
+}
+.arc-card-cover{
+  width:100%; aspect-ratio:2/3; border-radius:8px; background-size:cover; background-position:center;
+  background-color:var(--bg-card); border:1px solid var(--line);
+  display:flex; align-items:center; justify-content:center; font-size:26px;
+  transition:border-color .1s ease;
+}
+.arc-card:hover .arc-card-cover{ border-color:var(--tape); }
+.arc-card-cover.empty{ opacity:0.85; }
+.arc-card-name{
+  font-family:'Oswald', sans-serif; font-weight:600; font-size:11.5px; color:var(--text);
+  margin-top:6px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box;
+  -webkit-line-clamp:2; -webkit-box-orient:vertical;
+}
+.arc-card-sub{ font-size:10px; color:var(--text-dim); margin-top:2px; }
+.arc-detail-header{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;
 }
 .arc-name{ font-family:'Oswald', sans-serif; font-weight:600; font-size:13px; color:var(--text); }
 .arc-ongoing-tag{
   font-size:10.5px; color:var(--rec); letter-spacing:0.3px; font-family:'JetBrains Mono', monospace;
 }
 .arc-header-spacer{ flex:1; }
-.arc-group .entries-collapse{ margin-top:8px; }
 
 .arc-modal-row{
   display:flex; align-items:center; gap:10px;
@@ -2297,7 +2312,7 @@ let movieFolderMusic = {}; // { titleKeyLower: {name, dataUrl} }
 let movieDuration = {};  // { titleKeyLower: minutos (number) } — pisa el promedio general por tipo
 let seriesApiLink = {};   // { serieKeyLower: {source:'jikan'|'tmdb', malId, tmdbId, tmdbMediaType, lastChecked} } — para actualizar la meta sola
 let seriesArcs = {};      // { serieKeyLower: [{id, name, start, end (null = en emisión)}, ...] } — opcional, para dividir series muy largas
-let expandedArcs = new Set(); // claves "serieKey::arcId" (o "serieKey::none" para "Sin arco") de arcos actualmente expandidos
+let selectedArcPerSeries = {}; // { serieKeyLower: arcId | 'none' } — qué arco se está viendo en detalle (o nada = vista de grilla)
 // Datos traídos de Jikan/TMDB en la última búsqueda seleccionada, a la espera de que se registre el visionado
 let pendingApiGenresSeries = null;
 let pendingApiEpisodesSeries = null;
@@ -2972,7 +2987,7 @@ function mergeDicts(baseHashes, localDict, remoteDict){
 
 const DRIVE_ID_ARRAY_FIELDS = ['entries', 'movieEntries', 'pending', 'moviePending', 'trash', 'customAchievements'];
 const DRIVE_DICT_FIELDS = [
-  'status', 'statusManualAt', 'covers', 'genres', 'types', 'sagas', 'folderMusic', 'seriesGoals', 'seriesDuration', 'seriesApiLink',
+  'status', 'statusManualAt', 'covers', 'genres', 'types', 'sagas', 'folderMusic', 'seriesGoals', 'seriesDuration', 'seriesApiLink', 'seriesArcs',
   'movieCovers', 'movieGenres', 'movieTypes', 'movieSagas', 'franchises', 'movieFolderMusic', 'movieDuration', 'settings'
 ];
 
@@ -5460,7 +5475,21 @@ function hasOpenArc(name){
 }
 
 // Agrupa los episodios de una serie en sus arcos (más un bloque "Sin arco" para lo que no encaje
-// en ningún rango) y arma el HTML de cada uno, con su propio progreso y su propio expandir/colapsar.
+// en ningún rango). Muestra una grilla de portadas por arco; al tocar una se ven sus capítulos.
+function computeArcProgress(arc, arcItems){
+  const isOngoing = arc.end == null;
+  const crossesSeasons = arc.startSeason != null && arc.endSeason != null && arc.endSeason !== arc.startSeason;
+  const total = (isOngoing || crossesSeasons) ? null : (arc.end - arc.start + 1);
+  const watched = new Set(arcItems.map(e => `${e.season ?? ''}|${e.episode}`)).size;
+  const pct = total ? Math.min(100, Math.round((watched / total) * 100)) : 0;
+  return { isOngoing, total, watched, pct };
+}
+function arcSubLabel(prog){
+  if(prog.isOngoing) return `🔴 En emisión — ${prog.watched} vistos`;
+  if(prog.total) return `${prog.watched}/${prog.total} · ${prog.pct}%`;
+  return `${prog.watched} vistos`;
+}
+
 function buildArcGroupedHtml(serie, items, arcsList){
   const key = seriesKey(serie);
   const buckets = arcsList.map(arc => ({ arc, items: [] }));
@@ -5477,63 +5506,68 @@ function buildArcGroupedHtml(serie, items, arcsList){
     }
   });
 
-  let html = '';
+  const selected = selectedArcPerSeries[key];
 
-  buckets.forEach(({ arc, items: arcItems }) => {
-    const arcKey = `${key}::${arc.id}`;
-    const arcOpen = expandedArcs.has(arcKey);
-    const isOngoing = arc.end == null;
-    const crossesSeasons = arc.startSeason != null && arc.endSeason != null && arc.endSeason !== arc.startSeason;
-    // Si el arco se queda dentro de una sola temporada podemos calcular el total restando;
-    // si cruza de temporada esa resta no tiene sentido, así que solo mostramos cuántos viste.
-    const total = (isOngoing || crossesSeasons) ? null : (arc.end - arc.start + 1);
-    const watched = new Set(arcItems.map(e => `${e.season ?? ''}|${e.episode}`)).size;
-    const pct = total ? Math.min(100, Math.round((watched / total) * 100)) : 0;
-
-    html += `
-      <div class="arc-group">
-        <div class="arc-header" onclick="event.stopPropagation(); toggleArcExpand('${key}','${arc.id}')">
-          <span class="series-chevron ${arcOpen ? 'open' : ''}">▸</span>
+  // ---------- Vista detalle: capítulos de un solo arco (o de "Sin arco") ----------
+  if(selected){
+    if(selected === 'none'){
+      return `
+        <div class="arc-detail-header">
+          <button type="button" class="btn-mini" onclick="event.stopPropagation(); selectArc('${key}', null)">← Volver a arcos</button>
+          <span class="arc-name">Sin arco</span>
+          <span class="badge">${noArcItems.length} ep.</span>
+        </div>
+        ${renderSeriesEntryCards(noArcItems)}`;
+    }
+    const bucket = buckets.find(b => b.arc.id === selected);
+    if(bucket){
+      const { arc, items: arcItems } = bucket;
+      const prog = computeArcProgress(arc, arcItems);
+      return `
+        <div class="arc-detail-header">
+          <button type="button" class="btn-mini" onclick="event.stopPropagation(); selectArc('${key}', null)">← Volver a arcos</button>
           <span class="series-cover ${arc.cover ? '' : 'empty'}" style="width:24px; height:24px; font-size:11px; ${arc.cover ? `background-image:url('${arc.cover}')` : ''}"
                 onclick="event.stopPropagation(); openArcCoverPicker(decodeURIComponent('${encodeURIComponent(serie)}'), '${arc.id}')"
                 title="${arc.cover ? 'Cambiar portada del arco' : 'Agregar portada al arco'}">${arc.cover ? '' : '🖼️'}</span>
           <span class="arc-name">${escapeHtml(arc.name)}</span>
-          ${arc.cover ? `<span class="remove-cover" onclick="event.stopPropagation(); removeArcCover(decodeURIComponent('${encodeURIComponent(serie)}'), '${arc.id}')" title="Quitar portada">✕</span>` : ''}
           <span class="badge">${arcItems.length} ep.</span>
-          ${isOngoing
-            ? `<span class="arc-ongoing-tag">🔴 En emisión — ${watched} capítulos vistos</span>`
-            : (total ? `<span class="progress-label">${watched}/${total} · ${pct}%</span>` : `<span class="progress-label">${watched} vistos</span>`)}
+          <span class="progress-label">${arcSubLabel(prog)}</span>
           <span class="arc-header-spacer"></span>
-          ${isOngoing ? `<button type="button" class="btn-mini" onclick="event.stopPropagation(); closeArcPrompt(decodeURIComponent('${encodeURIComponent(serie)}'),'${arc.id}')">Cerrar arco</button>` : ''}
+          ${prog.isOngoing ? `<button type="button" class="btn-mini" onclick="event.stopPropagation(); closeArcPrompt(decodeURIComponent('${encodeURIComponent(serie)}'),'${arc.id}')">Cerrar arco</button>` : ''}
         </div>
-        ${(!isOngoing && total) ? `<div class="progress-row" style="margin:0 0 8px 2px;"><div class="progress-track ${pct >= 100 ? 'complete' : ''}"${arc.colorA && arc.colorB ? ` style="background:linear-gradient(90deg, ${arc.colorA}, ${arc.colorB});"` : ''}><div class="progress-mask" style="width:${100 - pct}%"></div></div></div>` : ''}
-        <div class="entries-collapse ${arcOpen ? 'open' : ''}">${renderSeriesEntryCards(arcItems)}</div>
-      </div>`;
-  });
-
-  if(noArcItems.length){
-    const arcKey = `${key}::none`;
-    const arcOpen = expandedArcs.has(arcKey);
-    html += `
-      <div class="arc-group">
-        <div class="arc-header" onclick="event.stopPropagation(); toggleArcExpand('${key}','none')">
-          <span class="series-chevron ${arcOpen ? 'open' : ''}">▸</span>
-          <span class="arc-name">Sin arco</span>
-          <span class="badge">${noArcItems.length} ep.</span>
-        </div>
-        <div class="entries-collapse ${arcOpen ? 'open' : ''}">${renderSeriesEntryCards(noArcItems)}</div>
-      </div>`;
+        ${(!prog.isOngoing && prog.total) ? `<div class="progress-row" style="margin:8px 0 12px 2px;"><div class="progress-track ${prog.pct >= 100 ? 'complete' : ''}"${arc.colorA && arc.colorB ? ` style="background:linear-gradient(90deg, ${arc.colorA}, ${arc.colorB});"` : ''}><div class="progress-mask" style="width:${100 - prog.pct}%"></div></div></div>` : ''}
+        ${renderSeriesEntryCards(arcItems)}`;
+    }
   }
 
+  // ---------- Vista grilla: una portada por arco ----------
+  let html = '<div class="arc-grid">';
+  buckets.forEach(({ arc, items: arcItems }) => {
+    const prog = computeArcProgress(arc, arcItems);
+    html += `
+      <div class="arc-card" onclick="event.stopPropagation(); selectArc('${key}','${arc.id}')">
+        <div class="arc-card-cover ${arc.cover ? '' : 'empty'}" style="${arc.cover ? `background-image:url('${arc.cover}')` : ''}">${arc.cover ? '' : '📜'}</div>
+        <div class="arc-card-name">${escapeHtml(arc.name)}</div>
+        <div class="arc-card-sub">${arcSubLabel(prog)}</div>
+      </div>`;
+  });
+  if(noArcItems.length){
+    html += `
+      <div class="arc-card" onclick="event.stopPropagation(); selectArc('${key}','none')">
+        <div class="arc-card-cover empty">📁</div>
+        <div class="arc-card-name">Sin arco</div>
+        <div class="arc-card-sub">${noArcItems.length} ep.</div>
+      </div>`;
+  }
+  html += '</div>';
   return html;
 }
-function toggleArcExpand(key, arcId){
-  const arcKey = `${key}::${arcId}`;
-  if(expandedArcs.has(arcKey)) expandedArcs.delete(arcKey);
-  else expandedArcs.add(arcKey);
+function selectArc(key, arcId){
+  if(arcId) selectedArcPerSeries[key] = arcId;
+  else delete selectedArcPerSeries[key];
   render();
 }
-window.toggleArcExpand = toggleArcExpand;
+window.selectArc = selectArc;
 
 async function closeArcPrompt(serie, arcId){
   const key = seriesKey(serie);
