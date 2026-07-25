@@ -6139,6 +6139,117 @@ function groupMovieEntries(list){
   return { groups, order };
 }
 
+// Construye el HTML de las tarjetas de visionado para una lista de entries de película.
+// Se usa tanto para grupos sin franquicia (flat) como para la película seleccionada dentro de una franquicia.
+function renderMovieEntryCards(items, showTitlePerCard){
+  return items.map((e, idx) => {
+    if(e.id === editingMovieId){
+      const ratingOptions = [0,1,2,3,4,5].map(v =>
+        `<option value="${v}" ${e.rating == v ? 'selected' : ''}>${v === 0 ? 'Sin calif.' : '★'.repeat(v)}</option>`
+      ).join('');
+      return `
+        <div class="entry-card editing" data-movie-id="${e.id}">
+          ${showTitlePerCard ? `<div class="entry-movie-title">🎬 ${escapeHtml(e.title)}</div>` : ''}
+          <div class="edit-grid movie-grid">
+            <div class="edit-field"><label>Fecha</label><input type="text" class="edit-date" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" oninput="maskDateInput(this)" value="${e.date ? isoToDisplay(e.date) : ''}" ${!e.date ? 'disabled' : ''}></div>
+            <div class="edit-field"><label>Hora</label><input type="time" class="edit-time" value="${e.time || ''}" ${!e.date ? 'disabled' : ''}></div>
+          </div>
+          <label class="checkbox-row-inline edit-line">
+            <input type="checkbox" class="edit-date-unknown" ${!e.date ? 'checked' : ''}
+              onchange="const c=this.closest('.entry-card'); c.querySelector('.edit-date').disabled=this.checked; c.querySelector('.edit-time').disabled=this.checked;">
+            No recuerdo la fecha/hora exacta
+          </label>
+          <div class="edit-field full"><label>Calificación</label><select class="edit-rating">${ratingOptions}</select></div>
+          <label class="checkbox-row-inline edit-line"><input type="checkbox" class="edit-rewatch" ${e.rewatch ? 'checked' : ''}> 🔁 Es un rewatch</label>
+          <div class="edit-field full"><label>Nota</label><textarea class="edit-note">${escapeHtml(e.note || '')}</textarea></div>
+          <div class="edit-actions">
+            <button class="btn-mini save" onclick="saveMovieEdit('${e.id}')">✔ Guardar</button>
+            <button class="btn-mini" onclick="cancelMovieEdit()">✕ Cancelar</button>
+          </div>
+        </div>`;
+    }
+    const stars = starString(e.rating);
+    const tag = showTitlePerCard ? 'Visionado' : (items.length > 1 ? `Visionado ${idx + 1}` : 'Visionado');
+    return `
+      <div class="entry-card movie-entry" data-movie-id="${e.id}">
+        <div class="entry-left">
+          ${showTitlePerCard ? `
+            <div class="entry-movie-title-row">
+              <span class="entry-movie-title">🎬 ${escapeHtml(e.title)}</span>
+              <span class="entry-movie-edit" onclick="openGenreModal('movie', decodeURIComponent('${encodeURIComponent(e.title)}'))" title="Editar género y tipo de esta película">🏷️✎</span>
+            </div>` : ''}
+          <div class="entry-tag-row">
+            <span class="entry-tag">${tag}</span>
+            ${stars ? `<span class="entry-stars">${stars}</span>` : ''}
+            ${e.rewatch ? `<span class="entry-rewatch">🔁 rewatch</span>` : ''}
+          </div>
+          <div class="entry-time">${fmtDate(e.date, e.time)}</div>
+          ${e.note ? `<div class="entry-note">"${escapeHtml(e.note)}"</div>` : ''}
+        </div>
+        <div class="entry-actions">
+          <button class="del-btn" onclick="startMovieEdit('${e.id}')" title="Editar">✎</button>
+          <button class="del-btn" onclick="deleteMovieEntry('${e.id}')" title="Eliminar registro">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// Agrupa las películas de una franquicia por título individual y muestra una grilla de portadas;
+// al tocar una se ven sus visionados (mismo patrón que los arcos de series).
+let selectedMovieInFranchise = {}; // { franquiciaDispKey: tituloKeyLower }
+
+function buildFranchiseMovieGrid(displayName, items){
+  const dispKey = seriesKey(displayName);
+  const byTitle = {};
+  items.forEach(e => {
+    const tKey = seriesKey(e.title);
+    if(!byTitle[tKey]) byTitle[tKey] = { title: e.title.trim(), items: [] };
+    byTitle[tKey].items.push(e);
+  });
+  const titleKeys = Object.keys(byTitle).sort((a, b) =>
+    byTitle[a].title.localeCompare(byTitle[b].title, 'es', { sensitivity:'base' })
+  );
+
+  const selected = selectedMovieInFranchise[dispKey];
+  if(selected && byTitle[selected]){
+    const { title, items: movieItems } = byTitle[selected];
+    const cover = movieCovers[selected] || null;
+    return `
+      <div class="arc-detail-header">
+        <button type="button" class="btn-mini" onclick="event.stopPropagation(); selectFranchiseMovie('${dispKey}', null)">← Volver a películas</button>
+        <span class="series-cover ${cover ? '' : 'empty'}" style="width:24px; height:24px; font-size:11px; ${cover ? `background-image:url('${cover}')` : ''}"
+              onclick="event.stopPropagation(); openMovieCoverPicker(decodeURIComponent('${encodeURIComponent(title)}'))"
+              title="${cover ? 'Cambiar portada' : 'Agregar portada'}">${cover ? '' : '🖼️'}</span>
+        <span class="arc-name">${escapeHtml(title)}</span>
+        <span class="badge">${movieItems.length} ${movieItems.length === 1 ? 'visionado' : 'visionados'}</span>
+        <span class="entry-movie-edit" onclick="openGenreModal('movie', decodeURIComponent('${encodeURIComponent(title)}'))" title="Editar género y tipo">🏷️✎</span>
+      </div>
+      ${renderMovieEntryCards(movieItems, false)}`;
+  }
+
+  let html = '<div class="arc-grid">';
+  titleKeys.forEach(tKey => {
+    const { title, items: movieItems } = byTitle[tKey];
+    const cover = movieCovers[tKey] || null;
+    const avgR = avgRatingOf(movieItems);
+    const stars = avgR ? starString(Math.round(avgR)) : '';
+    html += `
+      <div class="arc-card" onclick="event.stopPropagation(); selectFranchiseMovie('${dispKey}','${tKey}')">
+        <div class="arc-card-cover ${cover ? '' : 'empty'}" style="${cover ? `background-image:url('${cover}')` : ''}">${cover ? '' : '🎬'}</div>
+        <div class="arc-card-name">${escapeHtml(title)}</div>
+        <div class="arc-card-sub">${movieItems.length} ${movieItems.length === 1 ? 'vez' : 'veces'}${stars ? ' · ' + stars : ''}</div>
+      </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+function selectFranchiseMovie(dispKey, titleKey){
+  if(titleKey) selectedMovieInFranchise[dispKey] = titleKey;
+  else delete selectedMovieInFranchise[dispKey];
+  renderMovies();
+}
+window.selectFranchiseMovie = selectFranchiseMovie;
+
 function renderMovies(){
   updateMovieList();
   renderTimeCapsulePanel();
@@ -6187,56 +6298,7 @@ function renderMovies(){
     const isOpen = expandedMovies.has(dispKey);
     const cover = movieCovers[dispKey] || null;
 
-    const cards = items.map((e, idx) => {
-      if(e.id === editingMovieId){
-        const ratingOptions = [0,1,2,3,4,5].map(v =>
-          `<option value="${v}" ${e.rating == v ? 'selected' : ''}>${v === 0 ? 'Sin calif.' : '★'.repeat(v)}</option>`
-        ).join('');
-        return `
-          <div class="entry-card editing" data-movie-id="${e.id}">
-            ${isFranchise ? `<div class="entry-movie-title">🎬 ${escapeHtml(e.title)}</div>` : ''}
-            <div class="edit-grid movie-grid">
-              <div class="edit-field"><label>Fecha</label><input type="text" class="edit-date" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" oninput="maskDateInput(this)" value="${e.date ? isoToDisplay(e.date) : ''}" ${!e.date ? 'disabled' : ''}></div>
-              <div class="edit-field"><label>Hora</label><input type="time" class="edit-time" value="${e.time || ''}" ${!e.date ? 'disabled' : ''}></div>
-            </div>
-            <label class="checkbox-row-inline edit-line">
-              <input type="checkbox" class="edit-date-unknown" ${!e.date ? 'checked' : ''}
-                onchange="const c=this.closest('.entry-card'); c.querySelector('.edit-date').disabled=this.checked; c.querySelector('.edit-time').disabled=this.checked;">
-              No recuerdo la fecha/hora exacta
-            </label>
-            <div class="edit-field full"><label>Calificación</label><select class="edit-rating">${ratingOptions}</select></div>
-            <label class="checkbox-row-inline edit-line"><input type="checkbox" class="edit-rewatch" ${e.rewatch ? 'checked' : ''}> 🔁 Es un rewatch</label>
-            <div class="edit-field full"><label>Nota</label><textarea class="edit-note">${escapeHtml(e.note || '')}</textarea></div>
-            <div class="edit-actions">
-              <button class="btn-mini save" onclick="saveMovieEdit('${e.id}')">✔ Guardar</button>
-              <button class="btn-mini" onclick="cancelMovieEdit()">✕ Cancelar</button>
-            </div>
-          </div>`;
-      }
-      const stars = starString(e.rating);
-      const tag = isFranchise ? 'Visionado' : (items.length > 1 ? `Visionado ${idx + 1}` : 'Visionado');
-      return `
-        <div class="entry-card movie-entry" data-movie-id="${e.id}">
-          <div class="entry-left">
-            ${isFranchise ? `
-              <div class="entry-movie-title-row">
-                <span class="entry-movie-title">🎬 ${escapeHtml(e.title)}</span>
-                <span class="entry-movie-edit" onclick="openGenreModal('movie', decodeURIComponent('${encodeURIComponent(e.title)}'))" title="Editar género y tipo de esta película">🏷️✎</span>
-              </div>` : ''}
-            <div class="entry-tag-row">
-              <span class="entry-tag">${tag}</span>
-              ${stars ? `<span class="entry-stars">${stars}</span>` : ''}
-              ${e.rewatch ? `<span class="entry-rewatch">🔁 rewatch</span>` : ''}
-            </div>
-            <div class="entry-time">${fmtDate(e.date, e.time)}</div>
-            ${e.note ? `<div class="entry-note">"${escapeHtml(e.note)}"</div>` : ''}
-          </div>
-          <div class="entry-actions">
-            <button class="del-btn" onclick="startMovieEdit('${e.id}')" title="Editar">✎</button>
-            <button class="del-btn" onclick="deleteMovieEntry('${e.id}')" title="Eliminar registro">✕</button>
-          </div>
-        </div>`;
-    }).join('');
+    const cards = isFranchise ? buildFranchiseMovieGrid(displayName, items) : renderMovieEntryCards(items, false);
 
     const music = movieFolderMusic[dispKey] || null;
     const isPlaying = currentAudioKey === 'movie:' + dispKey;
