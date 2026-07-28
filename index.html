@@ -1006,6 +1006,14 @@ body{
 .arc-color-swatch:hover{ border-color:var(--text-dim); }
 .arc-color-swatch.active{ border-color:var(--text); box-shadow:0 0 0 2px var(--bg-card), 0 0 0 3px var(--text); }
 
+.song-picker-row{
+  display:flex; align-items:center; gap:10px;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+}
+.song-picker-row.active{ border-color:var(--tape); }
+.song-picker-name{ flex:1; min-width:0; font-size:12.5px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.song-picker-actions{ display:flex; gap:6px; flex-shrink:0; }
+
 /*Música*/
 .music-btn{
   flex-shrink:0; width:34px; height:34px; border-radius:8px;
@@ -2075,6 +2083,18 @@ body{
     </div>
   </div>
 
+  <div class="modal-overlay" id="songPickerModalOverlay" style="display:none;">
+    <div class="modal-card" style="max-width:400px;">
+      <button class="wrapped-close" id="songPickerModalClose" title="Cerrar">✕</button>
+      <div class="panel-label" id="songPickerModalTitle">🎵 Elegir música</div>
+      <div style="font-size:11px; color:var(--text-dim); margin:-6px 0 10px; line-height:1.5;">
+        Las canciones se comparten dentro de la misma serie — subí cada una una sola vez y reusala en la carpeta principal y en los arcos que la necesiten (ej. el mismo opening en varios arcos de la misma temporada).
+      </div>
+      <div id="songPickerList" style="display:flex; flex-direction:column; gap:8px; max-height:36vh; overflow-y:auto;"></div>
+      <button type="button" class="btn-secondary" id="songPickerUploadBtn" style="margin-top:12px;">➕ Subir canción nueva</button>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="bulkEditModalOverlay" style="display:none;">
     <div class="modal-card">
       <button class="wrapped-close" id="bulkEditModalClose" title="Cerrar">✕</button>
@@ -2255,29 +2275,53 @@ async function audioDbGetAll(){
 }
 // Vuelca TODO lo que hay ahora mismo en folderMusic/movieFolderMusic (en memoria) a IndexedDB,
 // reemplazando lo que hubiera. Se usa al migrar datos viejos y al restaurar un backup/Drive.
+function genSongId(){
+  return 'song' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
 async function audioDbReplaceAllFromMemory(){
   const db = await openAudioDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(AUDIO_STORE, 'readwrite');
     const store = tx.objectStore(AUDIO_STORE);
     store.clear();
-    Object.keys(folderMusic).forEach(k => store.put(folderMusic[k], 'series:' + k));
     Object.keys(movieFolderMusic).forEach(k => store.put(movieFolderMusic[k], 'movie:' + k));
+    Object.keys(songAudioCache).forEach(id => store.put(songAudioCache[id], 'song:' + id));
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
-// Reconstruye folderMusic/movieFolderMusic en memoria a partir de lo que hay guardado en IndexedDB.
+// Reconstruye movieFolderMusic y el caché de audio del banco de canciones a partir de IndexedDB.
+// De paso, migra automáticamente la música vieja de series (guardada suelta por carpeta, antes
+// de que existiera el banco de canciones compartido) a una canción del banco.
 async function loadAudioFromIndexedDb(){
   try{
     const all = await audioDbGetAll();
-    const fm = {}, mfm = {};
+    const mfm = {};
+    const songs = {};
+    const legacySeries = {};
     Object.keys(all).forEach(fullKey => {
-      if(fullKey.startsWith('series:')) fm[fullKey.slice(7)] = all[fullKey];
-      else if(fullKey.startsWith('movie:')) mfm[fullKey.slice(6)] = all[fullKey];
+      if(fullKey.startsWith('movie:')) mfm[fullKey.slice(6)] = all[fullKey];
+      else if(fullKey.startsWith('song:')) songs[fullKey.slice(5)] = all[fullKey];
+      else if(fullKey.startsWith('series:')) legacySeries[fullKey.slice(7)] = all[fullKey];
     });
-    folderMusic = fm;
     movieFolderMusic = mfm;
+    songAudioCache = songs;
+
+    for(const key of Object.keys(legacySeries)){
+      if(folderMusic[key] && folderMusic[key].songId){
+        await audioDbDelete('series:' + key); // ya migrada antes, esto es un resto viejo
+        continue;
+      }
+      const old = legacySeries[key];
+      if(!old || !old.dataUrl) continue;
+      const songId = genSongId();
+      if(!seriesSongBank[key]) seriesSongBank[key] = [];
+      seriesSongBank[key].push({ id: songId, name: old.name || 'Canción' });
+      songAudioCache[songId] = old.dataUrl;
+      await audioDbSet('song:' + songId, old.dataUrl);
+      await audioDbDelete('series:' + key);
+      folderMusic[key] = { songId };
+    }
   }catch(err){
     console.error('No se pudo leer la música guardada desde IndexedDB (¿navegador sin soporte o en modo privado?):', err);
   }
@@ -2297,7 +2341,9 @@ let pending = [];        // [{id, serie, note}]
 let genres = {};         // { serieKeyLower: 'Acción'|... }
 let types = {};          // { serieKeyLower: 'live'|'animada' }
 let sagas = {};           // { serieKeyLower: 'Marvel'|'Star Wars'|... } — franquicia opcional
-let folderMusic = {};    // { serieKeyLower: {name, dataUrl} }
+let folderMusic = {};    // { serieKeyLower: {songId} } — referencia a una canción del banco de esa serie
+let seriesSongBank = {}; // { serieKeyLower: [{id, name}] } — canciones subidas para esa serie, reutilizables
+let songAudioCache = {}; // { songId: dataUrl } — audio real de cada canción (en memoria, viene de IndexedDB)
 let seriesGoals = {};    // { serieKeyLower: totalEpisodios (number) }
 let seriesDuration = {}; // { serieKeyLower: minutosPorEpisodio (number) } — pisa el promedio general por tipo
 
@@ -2619,6 +2665,7 @@ async function loadAll(){
       // Compatibilidad con backups/localStorage viejos que todavía traían la música adentro:
       // si aparece acá, la migramos a IndexedDB más abajo y dejamos de guardarla en localStorage.
       folderMusic = parsed.folderMusic || {};
+      seriesSongBank = parsed.seriesSongBank || {};
       seriesGoals = parsed.seriesGoals || {};
       seriesDuration = parsed.seriesDuration || {};
       seriesApiLink = parsed.seriesApiLink || {};
@@ -2643,10 +2690,23 @@ async function loadAll(){
     console.error('Error al cargar datos:', e);
   }
 
-  // Migración de música: si venía adentro del JSON de localStorage (formato viejo), la volcamos
-  // a IndexedDB una sola vez. Después, IndexedDB manda siempre como fuente de verdad para el audio.
+  // Migración de música: si venía adentro del JSON de localStorage (formato viejo, de antes de
+  // IndexedDB), la volcamos a IndexedDB con las claves que loadAudioFromIndexedDb() ya sabe migrar
+  // al banco de canciones compartido.
   try{
-    if(hadInlineAudioToMigrate) await audioDbReplaceAllFromMemory();
+    if(hadInlineAudioToMigrate){
+      const db = await openAudioDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(AUDIO_STORE, 'readwrite');
+        const store = tx.objectStore(AUDIO_STORE);
+        Object.keys(folderMusic).forEach(k => {
+          if(folderMusic[k] && folderMusic[k].dataUrl) store.put(folderMusic[k], 'series:' + k);
+        });
+        Object.keys(movieFolderMusic).forEach(k => store.put(movieFolderMusic[k], 'movie:' + k));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
     await loadAudioFromIndexedDb();
   }catch(err){
     console.error('No se pudo migrar/cargar la música de carpeta:', err);
@@ -2696,18 +2756,19 @@ async function saveAll(){
 /*BACKUP: exportar / restaurar todo*/
 function collectAllData(){
   return {
-    entries, status, statusManualAt, trash, deletedIds, customAchievements, covers, pending, genres, types, sagas, folderMusic, seriesGoals, seriesDuration, seriesApiLink, seriesArcs,
+    entries, status, statusManualAt, trash, deletedIds, customAchievements, covers, pending, genres, types, sagas, folderMusic, seriesSongBank, songAudioCache, seriesGoals, seriesDuration, seriesApiLink, seriesArcs,
     movieEntries, movieCovers, moviePending, movieGenres, movieTypes, movieSagas, franchises, movieFolderMusic, movieDuration, settings,
     exportedAt: new Date().toISOString(),
     backupVersion: 1
   };
 }
 
-// Igual que collectAllData(), pero sin folderMusic/movieFolderMusic — es lo único que debe
-// escribirse en localStorage (la música vive en IndexedDB). Los backups y Drive sí usan
-// collectAllData() completo, porque no tienen el límite de tamaño de localStorage.
+// Igual que collectAllData(), pero sin el audio real (movieFolderMusic ni el audio del banco de
+// canciones) — eso vive en IndexedDB. folderMusic/seriesSongBank sí quedan: son solo referencias
+// livianas (ids y nombres), no pesan nada. Los backups y Drive sí usan collectAllData() completo,
+// porque no tienen el límite de tamaño de localStorage.
 function collectDataForLocalStorage(){
-  const { folderMusic: _fm, movieFolderMusic: _mfm, ...rest } = collectAllData();
+  const { movieFolderMusic: _mfm, songAudioCache: _sac, ...rest } = collectAllData();
   return rest;
 }
 
@@ -2727,6 +2788,8 @@ async function applyAllData(parsed){
   types = parsed.types || {};
   sagas = parsed.sagas || {};
   folderMusic = parsed.folderMusic || {};
+  seriesSongBank = parsed.seriesSongBank || {};
+  songAudioCache = parsed.songAudioCache || {};
   seriesGoals = parsed.seriesGoals || {};
   seriesDuration = parsed.seriesDuration || {};
   seriesApiLink = parsed.seriesApiLink || {};
@@ -4126,7 +4189,8 @@ function toggleExpand(name){
     stopFolderMusic('series:' + key);
   } else {
     expandedSeries.add(key);
-    playFolderMusic('series:' + key, (folderMusic[key] || {}).dataUrl);
+    const musicRef = resolveMusicRef(name, folderMusic[key]);
+    playFolderMusic('series:' + key, musicRef ? musicRef.dataUrl : null);
   }
   render();
 }
@@ -4415,22 +4479,37 @@ function stopFolderMusic(audioKey){
   }
 }
 
+/* ---------- Banco de canciones por serie (compartido entre la carpeta principal y sus arcos) ---------- */
+function getSongBank(name){
+  return seriesSongBank[seriesKey(name)] || [];
+}
+function getSongById(name, songId){
+  return getSongBank(name).find(s => s.id === songId) || null;
+}
+// Dado un "asignador" ({songId}, de folderMusic o de un arco), devuelve {name, dataUrl} listos para
+// tocar/mostrar, o null si no hay canción asignada o la referencia quedó huérfana.
+function resolveMusicRef(name, ref){
+  if(!ref || !ref.songId) return null;
+  const song = getSongById(name, ref.songId);
+  if(!song) return null;
+  return { name: song.name, dataUrl: songAudioCache[ref.songId] || null };
+}
+
+let songPickerTarget = null; // { serieName, kind:'folder'|'arc', arcId }
+
 function openMusicPicker(name){
-  pendingMusicSeries = name;
-  document.getElementById('audioFileInput').click();
+  openSongPickerModal(name, 'folder', null);
 }
 async function removeFolderMusic(name){
   const key = seriesKey(name);
   const removed = folderMusic[key];
   if(!removed) return;
   delete folderMusic[key];
-  await audioDbDelete('series:' + key);
   stopFolderMusic('series:' + key);
   render();
   await saveAll();
-  showUndoToast('Música de la carpeta eliminada.', async () => {
+  showUndoToast('Música de la carpeta quitada.', async () => {
     folderMusic[key] = removed;
-    await audioDbSet('series:' + key, removed);
     render();
     await saveAll();
   });
@@ -4438,28 +4517,133 @@ async function removeFolderMusic(name){
 window.openMusicPicker = openMusicPicker;
 window.removeFolderMusic = removeFolderMusic;
 
+function currentSongIdForPickerTarget(){
+  if(!songPickerTarget) return null;
+  const key = seriesKey(songPickerTarget.serieName);
+  if(songPickerTarget.kind === 'arc'){
+    const arc = (seriesArcs[key] || []).find(a => a.id === songPickerTarget.arcId);
+    return arc ? arc.songId || null : null;
+  }
+  return folderMusic[key] ? folderMusic[key].songId || null : null;
+}
+
+function openSongPickerModal(serieName, kind, arcId){
+  songPickerTarget = { serieName, kind, arcId: arcId || null };
+  document.getElementById('songPickerModalTitle').textContent = kind === 'arc' ? `🎵 Música del arco — ${serieName}` : `🎵 Música — ${serieName}`;
+  renderSongPickerList();
+  document.getElementById('songPickerModalOverlay').style.display = 'flex';
+}
+window.openSongPickerModal = openSongPickerModal;
+function closeSongPickerModal(){
+  document.getElementById('songPickerModalOverlay').style.display = 'none';
+  songPickerTarget = null;
+}
+
+function renderSongPickerList(){
+  const bank = getSongBank(songPickerTarget.serieName);
+  const el = document.getElementById('songPickerList');
+  const currentId = currentSongIdForPickerTarget();
+  if(!bank.length){
+    el.innerHTML = '<div class="activity-detail-empty">Todavía no subiste ninguna canción para esta serie.</div>';
+    return;
+  }
+  el.innerHTML = bank.map(song => `
+    <div class="song-picker-row ${song.id === currentId ? 'active' : ''}">
+      <span class="song-picker-name">🎵 ${escapeHtml(song.name)}</span>
+      <div class="song-picker-actions">
+        <button type="button" class="btn-mini ${song.id === currentId ? 'start' : ''}" onclick="useSongForTarget('${song.id}')">${song.id === currentId ? '✔ En uso' : 'Usar'}</button>
+        <button type="button" class="btn-mini" onclick="renameSongPrompt('${song.id}')" title="Renombrar">✎</button>
+        <button type="button" class="btn-mini" onclick="deleteSongPrompt('${song.id}')" title="Eliminar del banco">🗑️</button>
+      </div>
+    </div>`).join('');
+}
+
+async function useSongForTarget(songId){
+  if(!songPickerTarget) return;
+  const key = seriesKey(songPickerTarget.serieName);
+  if(songPickerTarget.kind === 'arc'){
+    const arc = (seriesArcs[key] || []).find(a => a.id === songPickerTarget.arcId);
+    if(arc) arc.songId = songId;
+  } else {
+    folderMusic[key] = { songId };
+  }
+  render();
+  await saveAll();
+  closeSongPickerModal();
+  if(arcModalTarget) renderArcModalList();
+}
+window.useSongForTarget = useSongForTarget;
+
+async function renameSongPrompt(songId){
+  const key = seriesKey(songPickerTarget.serieName);
+  const song = (seriesSongBank[key] || []).find(s => s.id === songId);
+  if(!song) return;
+  const name = await customPrompt('Nombre de la canción:', song.name, { icon:'🎵', title:'Renombrar canción', okText:'Guardar' });
+  if(name === null || !name.trim()) return;
+  song.name = name.trim();
+  render();
+  await saveAll();
+  renderSongPickerList();
+}
+window.renameSongPrompt = renameSongPrompt;
+
+async function deleteSongPrompt(songId){
+  const key = seriesKey(songPickerTarget.serieName);
+  const usedBy = [];
+  if(folderMusic[key] && folderMusic[key].songId === songId) usedBy.push('la carpeta principal');
+  (seriesArcs[key] || []).forEach(a => { if(a.songId === songId) usedBy.push(`el arco "${a.name}"`); });
+
+  const msg = usedBy.length
+    ? `Esta canción la está usando: ${usedBy.join(', ')}. Si la borrás del banco, se quedan sin música. ¿Continuar?`
+    : '¿Eliminar esta canción del banco?';
+  const ok = await customConfirm(msg, { icon:'🗑️', title:'Eliminar canción', okText:'Eliminar', danger:true });
+  if(!ok) return;
+
+  if(folderMusic[key] && folderMusic[key].songId === songId) delete folderMusic[key];
+  (seriesArcs[key] || []).forEach(a => { if(a.songId === songId) delete a.songId; });
+  seriesSongBank[key] = (seriesSongBank[key] || []).filter(s => s.id !== songId);
+  delete songAudioCache[songId];
+  await audioDbDelete('song:' + songId);
+
+  render();
+  await saveAll();
+  renderSongPickerList();
+  if(arcModalTarget) renderArcModalList();
+}
+window.deleteSongPrompt = deleteSongPrompt;
+
+document.getElementById('songPickerUploadBtn').addEventListener('click', () => {
+  document.getElementById('audioFileInput').click();
+});
+document.getElementById('songPickerModalClose').addEventListener('click', closeSongPickerModal);
+document.getElementById('songPickerModalOverlay').addEventListener('click', (e) => {
+  if(e.target.id === 'songPickerModalOverlay') closeSongPickerModal();
+});
+
 document.getElementById('audioFileInput').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
-  if(!file || !pendingMusicSeries) return;
+  if(!file || !songPickerTarget) return;
   if(file.size > MAX_AUDIO_BYTES){
-    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elige un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
-    pendingMusicSeries = null;
+    await customAlert(`Ese archivo de audio es muy pesado (más de ${Math.round(MAX_AUDIO_BYTES / (1024*1024))}MB). Elegí un clip más corto o liviano.`, { icon:'🎵', title:'Archivo muy pesado' });
     return;
   }
+  const defaultName = file.name.replace(/\.[^/.]+$/, '');
+  const name = await customPrompt('¿Cómo se llama esta canción? (ej: "Opening S2")', defaultName, { icon:'🎵', title:'Nueva canción', okText:'Guardar' });
+  if(name === null) return;
   try{
     const dataUrl = await readFileAsDataUrl(file);
-    const key = seriesKey(pendingMusicSeries);
-    const value = { name: file.name, dataUrl };
-    folderMusic[key] = value;
-    await audioDbSet('series:' + key, value);
-    await saveAll();
-    render();
+    const songId = genSongId();
+    const key = seriesKey(songPickerTarget.serieName);
+    if(!seriesSongBank[key]) seriesSongBank[key] = [];
+    seriesSongBank[key].push({ id: songId, name: name.trim() || defaultName });
+    songAudioCache[songId] = dataUrl;
+    await audioDbSet('song:' + songId, dataUrl);
+    await useSongForTarget(songId);
   }catch(err){
     console.error('No se pudo procesar/guardar el audio', err);
     await customAlert('No se pudo guardar este audio. Probá con un archivo más liviano.', { icon:'🎵', title:'Error al guardar' });
   }
-  pendingMusicSeries = null;
 });
 
 /*SERIES: status / expand*/
@@ -5354,7 +5538,8 @@ function goToGlobalSearchResult(idx){
     switchSeriesSub('log');
     if(!expandedSeries.has(key)){
       expandedSeries.add(key);
-      playFolderMusic('series:' + key, (folderMusic[key] || {}).dataUrl);
+      const musicRef = resolveMusicRef(item.groupName, folderMusic[key]);
+      playFolderMusic('series:' + key, musicRef ? musicRef.dataUrl : null);
     }
     render();
   } else {
@@ -5565,6 +5750,18 @@ function buildArcGroupedHtml(serie, items, arcsList){
 function selectArc(key, arcId){
   if(arcId) selectedArcPerSeries[key] = arcId;
   else delete selectedArcPerSeries[key];
+
+  // Si el arco tiene su propia canción (ej. un opening distinto), suena esa mientras lo mirás;
+  // al volver a la grilla, vuelve a sonar la de la carpeta principal (si tiene).
+  const serieName = getDisplayNameForSeriesKey(key);
+  if(arcId){
+    const arc = (seriesArcs[key] || []).find(a => a.id === arcId);
+    const ref = arc && arc.songId ? resolveMusicRef(serieName, { songId: arc.songId }) : null;
+    if(ref && ref.dataUrl) playFolderMusic('series:' + key, ref.dataUrl);
+  } else {
+    const ref = resolveMusicRef(serieName, folderMusic[key]);
+    playFolderMusic('series:' + key, ref ? ref.dataUrl : null);
+  }
   render();
 }
 window.selectArc = selectArc;
@@ -5629,6 +5826,7 @@ function renderArcModalList(){
         <div class="arc-modal-range">${startLabel} – ${endLabel}</div>
       </div>
       <div class="arc-modal-actions">
+        <button type="button" class="btn-mini" onclick="openSongPickerModal(decodeURIComponent('${encodeURIComponent(arcModalTarget)}'), 'arc', '${arc.id}')" title="${arc.songId ? 'Cambiar música de este arco' : 'Elegir música para este arco'}">${arc.songId ? '🎵' : '🎵+'}</button>
         <button type="button" class="btn-mini" onclick="openArcColorModal('${arc.id}')" title="Elegir color de la barra de progreso">🎨</button>
         ${arc.end == null ? `<button type="button" class="btn-mini" onclick="closeArcPrompt(decodeURIComponent('${encodeURIComponent(arcModalTarget)}'),'${arc.id}')">Cerrar</button>` : ''}
         <button type="button" class="btn-mini" onclick="deleteArcPrompt('${arc.id}')" title="Eliminar arco (los capítulos no se borran, solo dejan de estar agrupados)">🗑️</button>
@@ -5928,7 +6126,7 @@ function render(){
     const groupGenre = getGenre(serie);
     const groupType = getType(serie);
     const groupSaga = sagas[seriesKey(serie)] || '';
-    const music = folderMusic[seriesKey(serie)] || null;
+    const music = resolveMusicRef(serie, folderMusic[seriesKey(serie)]);
     const isPlaying = currentAudioKey === 'series:' + seriesKey(serie);
 
     const goal = getSeriesGoal(serie);
@@ -7207,7 +7405,8 @@ function getMusicPool(genreFilter){
   Object.keys(folderMusic).forEach(key => {
     const g = genres[key] || [];
     if(!genreFilter || g.includes(genreFilter)){
-      pool.push({ audioKey: 'series:' + key, dataUrl: folderMusic[key].dataUrl, songName: folderMusic[key].name });
+      const ref = resolveMusicRef(key, folderMusic[key]);
+      if(ref && ref.dataUrl) pool.push({ audioKey: 'series:' + key, dataUrl: ref.dataUrl, songName: ref.name });
     }
   });
   Object.keys(movieFolderMusic).forEach(key => {
@@ -7227,10 +7426,14 @@ function pickRandomMusic(genreFilter){
 
 function getSpecificMusic(mediaType, name){
   const key = seriesKey(name);
-  const store = mediaType === 'series' ? folderMusic : movieFolderMusic;
-  const entry = store[key];
+  if(mediaType === 'series'){
+    const ref = resolveMusicRef(name, folderMusic[key]);
+    if(!ref || !ref.dataUrl) return null;
+    return { audioKey: 'series:' + key, dataUrl: ref.dataUrl, songName: ref.name };
+  }
+  const entry = movieFolderMusic[key];
   if(!entry) return null;
-  return { audioKey: (mediaType === 'series' ? 'series:' : 'movie:') + key, dataUrl: entry.dataUrl, songName: entry.name };
+  return { audioKey: 'movie:' + key, dataUrl: entry.dataUrl, songName: entry.name };
 }
 
 function resolveSlideMusic(slide){
